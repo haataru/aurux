@@ -38,6 +38,11 @@ void keyboard_init(void) {
 
 // Called from assembly ISR
 void keyboard_handler_main(void) {
+    unsigned char status = inb(0x64);
+    if (!(status & 1)) {
+        outb(0x20, 0x20);
+        return;
+    }
     unsigned char scancode = inb(0x60);
     
     // Handle key release (bit 7 set)

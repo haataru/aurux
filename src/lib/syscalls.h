@@ -20,5 +20,8 @@ int unlink(const char* path);
 int chdir(const char* path);
 int getcwd(char* buf, int size);
 int gettime(int* time_arr);
+void sleep(unsigned int ms);
+int kill(unsigned int pid, int signal);
+int get_processes(void* buffer, int max_count);
 
 #endif

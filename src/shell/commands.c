@@ -149,10 +149,10 @@ static void cmd_reboot(void) {
     if (attempts >= max_attempts) {
         vga_print("Keyboard controller not responding. Trying alternative methods...\n");
         
-        outb(0x604, 0x2000);
+        outw(0x604, 0x2000);
         for (volatile int i = 0; i < 100000; i++);
         
-        outb(0xB004, 0x2000);
+        outw(0xB004, 0x2000);
         for (volatile int i = 0; i < 100000; i++);
         
         outb(0xCF9, 0x0E);

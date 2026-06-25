@@ -2,6 +2,7 @@
 #include "../drivers/vga/vga.h"
 #include "../drivers/keyboard/keyboard.h"
 #include "../lib/lib.h"
+#include "../fs/fs.h"
 
 static char input_buffer[SHELL_MAX_INPUT];
 static int input_pos = 0;

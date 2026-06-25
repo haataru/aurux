@@ -4,5 +4,6 @@ kernel.map
 *.img
 *.ELF
 message.txt
-build.bat
 build/
+serial.log
+run_qemu_serial.bat

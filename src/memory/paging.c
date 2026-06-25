@@ -74,7 +74,7 @@ unsigned int* create_address_space(void) {
 
 unsigned int* clone_address_space(unsigned int* current_pd) {
     unsigned int* new_pd = (unsigned int*)pmm_alloc_page();
-    if (!new_pd) return 0;
+    if (!new_pd) return NULL;
     
     for (int i = 0; i < 1024; i++) {
         new_pd[i] = 0x02; 

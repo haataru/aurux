@@ -20,7 +20,7 @@ int printf(const char* format, ...) {
             switch (*p) {
                 case 'd': {
                     int val = va_arg(args, int);
-                    char buf[32];
+
                     int i = 0;
                     if (val < 0) {
                         vga_putchar('-');
@@ -45,7 +45,7 @@ int printf(const char* format, ...) {
                 }
                 case 'u': {
                     unsigned int val = va_arg(args, unsigned int);
-                    char buf[32];
+
                     int i = 0;
                     if (val == 0) {
                         vga_putchar('0');
@@ -276,7 +276,7 @@ int kprintf(const char* format, ...) {
             switch (*p) {
                 case 'd': {
                     int val = va_arg(args, int);
-                    char buf[32];
+
                     int i = 0;
                     if (val < 0) {
                         vga_putchar('-');

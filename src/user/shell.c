@@ -3,8 +3,8 @@
 // Syscalls are now included via lib.h -> syscalls.h
 
 static int shell_exec(char* cmd, char* arg, int in_fd, int out_fd) {
-    char* redirect_out = 0;
-    char* redirect_in = 0;
+    char* redirect_out = NULL;
+    char* redirect_in = NULL;
     
     // Process < and > (lazy simple parsing)
     for (int i = 0; arg[i]; i++) {
@@ -68,7 +68,7 @@ static int shell_exec(char* cmd, char* arg, int in_fd, int out_fd) {
             
             // Auto append .elf
             int len = strlen(path_buf);
-            if (len < 4 || strcmp(path_buf + len - 4, ".elf") != 0 && strcmp(path_buf + len - 4, ".ELF") != 0) {
+            if (len < 4 || (strcmp(path_buf + len - 4, ".elf") != 0 && strcmp(path_buf + len - 4, ".ELF") != 0)) {
                 strcat(path_buf, ".elf");
             }
             exec_path = path_buf;
@@ -96,6 +96,8 @@ static int shell_exec(char* cmd, char* arg, int in_fd, int out_fd) {
 }
 
 int main(int argc, char** argv) {
+    (void)argc;
+    (void)argv;
     // Optionally use argv later if needed
     print("\033[2J\033[H");
     print("\033[96m  __ _ _   _ _ __ _   ___  __\033[0m\n");
@@ -163,7 +165,26 @@ int main(int argc, char** argv) {
         
         char *cmd = input;
         char *arg = "";
-        char *pipe_symbol = 0;
+        char *pipe_symbol = NULL;
+        int background = 0;
+        
+        // Strip trailing spaces and check for &
+        for (int i = pos - 1; i >= 0; i--) {
+            if (input[i] == ' ') {
+                input[i] = '\0';
+            } else if (input[i] == '&') {
+                background = 1;
+                input[i] = '\0';
+                i--;
+                while(i >= 0 && input[i] == ' ') {
+                    input[i] = '\0';
+                    i--;
+                }
+                break;
+            } else {
+                break;
+            }
+        }
         
         // Find pipe symbol first
         for (int i = 0; input[i]; i++) {
@@ -253,7 +274,28 @@ int main(int argc, char** argv) {
             } else {
                 int pid = shell_exec(cmd, arg, 0, 1);
                 if (pid > 0) {
-                    wait(pid);
+                    if (!background) {
+                        wait(pid);
+                    } else {
+                        print("[");
+                        
+                        char pid_str[16];
+                        int p = pid, i = 0;
+                        if (p == 0) pid_str[i++] = '0';
+                        while (p > 0) {
+                            pid_str[i++] = '0' + (p % 10);
+                            p /= 10;
+                        }
+                        for (int j = 0; j < i / 2; j++) {
+                            char t = pid_str[j];
+                            pid_str[j] = pid_str[i - 1 - j];
+                            pid_str[i - 1 - j] = t;
+                        }
+                        pid_str[i] = '\0';
+                        
+                        print(pid_str);
+                        print("] started in background\n");
+                    }
                 } else {
                     print("fork failed\n");
                 }

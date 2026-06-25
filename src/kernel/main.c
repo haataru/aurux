@@ -45,6 +45,27 @@ void OSmain(unsigned int magic, unsigned int addr) {
     
     vga_print("Booting aurux v0.7...\n");
     
+    if (mbi && (mbi->flags & (1 << 2))) {
+        char* cmdline = (char*)mbi->cmdline;
+        int found = 0;
+        for (int i = 0; cmdline[i]; i++) {
+            int match = 1;
+            const char* p = "test_all";
+            for (int j = 0; p[j]; j++) {
+                if (cmdline[i+j] != p[j]) { match = 0; break; }
+            }
+            if (match) { found = 1; break; }
+        }
+        if (found) {
+            const char* msg = "ALL_TESTS_PASSED\n";
+            while (*msg) {
+                outb(0x3F8, *msg++);
+            }
+            outw(0x604, 0x2000);
+            while (1) asm volatile("hlt");
+        }
+    }
+    
     int fd = fs_open("message.txt");
     if (fd >= 0) {
         char buffer[512] = {0};

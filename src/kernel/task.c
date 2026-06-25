@@ -19,9 +19,9 @@ void tasking_init(void) {
     main_task->state = TASK_RUNNING;
     main_task->sleep_ticks = 0;
     main_task->waiting_for_pid = 0;
-    main_task->waiting_for_io = 0;
+    main_task->waiting_for_io = NULL;
     main_task->pending_signals = 0;
-    for (int i = 0; i < 16; i++) main_task->fd_table[i] = 0;
+    for (int i = 0; i < 16; i++) main_task->fd_table[i] = NULL;
     main_task->next = main_task; // Circular queue implementation for round-robin scheduling.
     
     current_task = main_task;
@@ -44,9 +44,9 @@ void create_task(void (*entry_point)(void)) {
     new_task->state = TASK_READY;
     new_task->sleep_ticks = 0;
     new_task->waiting_for_pid = 0;
-    new_task->waiting_for_io = 0;
+    new_task->waiting_for_io = NULL;
     new_task->pending_signals = 0;
-    for (int i = 0; i < 16; i++) new_task->fd_table[i] = 0;
+    for (int i = 0; i < 16; i++) new_task->fd_table[i] = NULL;
     
     unsigned int* stack = (unsigned int*)pmm_alloc_page();
     
@@ -89,9 +89,9 @@ void create_user_task(void (*entry_point)(void)) {
     new_task->state = TASK_READY;
     new_task->sleep_ticks = 0;
     new_task->waiting_for_pid = 0;
-    new_task->waiting_for_io = 0;
+    new_task->waiting_for_io = NULL;
     new_task->pending_signals = 0;
-    for (int i = 0; i < 16; i++) new_task->fd_table[i] = 0;
+    for (int i = 0; i < 16; i++) new_task->fd_table[i] = NULL;
     
     unsigned int* kstack = (unsigned int*)pmm_alloc_page();
     unsigned int* ustack = (unsigned int*)pmm_alloc_page();
@@ -136,7 +136,7 @@ struct task* create_process(unsigned int* page_dir, unsigned int entry_point, un
     new_task->state = TASK_READY;
     new_task->sleep_ticks = 0;
     new_task->waiting_for_pid = 0;
-    new_task->waiting_for_io = 0;
+    new_task->waiting_for_io = NULL;
     new_task->pending_signals = 0;
     extern struct task* current_task;
     if (current_task) {
@@ -147,7 +147,7 @@ struct task* create_process(unsigned int* page_dir, unsigned int entry_point, un
             }
         }
     } else {
-        for (int i = 0; i < 16; i++) new_task->fd_table[i] = 0;
+        for (int i = 0; i < 16; i++) new_task->fd_table[i] = NULL;
     }
     
     unsigned int* kstack = (unsigned int*)pmm_alloc_page();
@@ -215,21 +215,21 @@ unsigned int timer_handler(unsigned int esp) {
         return esp;
     }
     
-        if (current_task->pending_signals & 2) { // SIGINT
-            current_task->state = TASK_DEAD;
-            task_to_free = current_task;
-            
-            struct task* iter2 = current_task->next;
-            do {
-                if (iter2->waiting_for_pid == current_task->id) {
-                    iter2->waiting_for_pid = 0;
-                    iter2->state = TASK_READY;
-                }
-                iter2 = iter2->next;
-            } while (iter2 != current_task);
-        } else {
-            current_task->esp = esp;
-        }
+    if (current_task->pending_signals & 2) { // SIGINT
+        current_task->state = TASK_DEAD;
+        task_to_free = current_task;
+        
+        struct task* iter2 = current_task->next;
+        do {
+            if (iter2->waiting_for_pid == current_task->id) {
+                iter2->waiting_for_pid = 0;
+                iter2->state = TASK_READY;
+            }
+            iter2 = iter2->next;
+        } while (iter2 != current_task);
+    } else {
+        current_task->esp = esp;
+    }
     
     struct task* next_task = current_task->next;
     
@@ -364,7 +364,7 @@ void wakeup_tasks_waiting_for_io(void* io_obj) {
     do {
         if (iter->state == TASK_SLEEPING && iter->waiting_for_io == io_obj) {
             iter->state = TASK_READY;
-            iter->waiting_for_io = 0;
+            iter->waiting_for_io = NULL;
         }
         iter = iter->next;
     } while (iter != ready_queue);
@@ -388,7 +388,7 @@ int task_fork(unsigned int esp) {
     child->state = TASK_READY;
     child->sleep_ticks = 0;
     child->waiting_for_pid = 0;
-    child->waiting_for_io = 0;
+    child->waiting_for_io = NULL;
     child->pending_signals = 0;
     child->heap_start = parent->heap_start;
     child->heap_end = parent->heap_end;
@@ -449,4 +449,49 @@ int task_fork(unsigned int esp) {
     
     asm volatile("sti");
     return child->id;
+}
+
+int task_kill(unsigned int pid, int signal) {
+    if (pid == 0) return -1;
+    struct task* iter = ready_queue;
+    if (!iter) return -1;
+    do {
+        if (iter->id == pid) {
+            iter->pending_signals |= (1 << signal);
+            return 0;
+        }
+        iter = iter->next;
+    } while (iter != ready_queue);
+    return -1;
+}
+
+struct process_info {
+    unsigned int id;
+    int state;
+    char name[32];
+};
+
+int task_get_processes(void* buffer, int max_count) {
+    struct process_info* info = (struct process_info*)buffer;
+    if (!info || max_count <= 0) return -1;
+    
+    struct task* iter = ready_queue;
+    if (!iter) return 0;
+    
+    int count = 0;
+    do {
+        info[count].id = iter->id;
+        info[count].state = iter->state;
+        
+        int i;
+        for (i = 0; i < 31 && iter->name[i]; i++) {
+            info[count].name[i] = iter->name[i];
+        }
+        info[count].name[i] = '\0';
+        
+        count++;
+        iter = iter->next;
+    } while (iter != ready_queue && count < max_count);
+    
+    return count;
 }

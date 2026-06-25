@@ -1,5 +1,9 @@
 #include "malloc.h"
 
+#ifndef NULL
+#define NULL ((void*)0)
+#endif
+
 struct block_meta {
     size_t size;
     struct block_meta *next;
@@ -7,7 +11,7 @@ struct block_meta {
 };
 
 #define META_SIZE sizeof(struct block_meta)
-static void *global_base = 0;
+static void *global_base = NULL;
 
 static void* sbrk(int increment) {
     unsigned int current_brk;
@@ -39,14 +43,14 @@ static struct block_meta *request_space(struct block_meta* last, size_t size) {
     block = (struct block_meta *)sbrk(0);
     void *request = sbrk(size + META_SIZE);
     if (request == (void*)-1) {
-        return 0; // sbrk failed.
+        return NULL; // sbrk failed.
     }
     
     if (last) { // NULL on first request.
         last->next = block;
     }
     block->size = size;
-    block->next = 0;
+    block->next = NULL;
     block->free = 0;
     return block;
 }
@@ -55,13 +59,13 @@ void *malloc(size_t size) {
     struct block_meta *block;
 
     if (size <= 0) {
-        return 0;
+        return NULL;
     }
 
     if (!global_base) { // First call.
-        block = request_space(0, size);
+        block = request_space(NULL, size);
         if (!block) {
-            return 0;
+            return NULL;
         }
         global_base = block;
     } else {
@@ -70,7 +74,7 @@ void *malloc(size_t size) {
         if (!block) { // Failed to find free block.
             block = request_space(last, size);
             if (!block) {
-                return 0;
+                return NULL;
             }
         } else { // Found free block
             block->free = 0;

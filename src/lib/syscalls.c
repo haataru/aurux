@@ -59,6 +59,10 @@ int pipe(int fd[2]) {
     return ret;
 }
 
+void sleep(unsigned int ms) {
+    asm volatile("int $0x80" :: "a"(22), "b"(ms) : "memory");
+}
+
 int dup2(int oldfd, int newfd) {
     int ret;
     asm volatile("int $0x80" : "=a"(ret) : "a"(21), "b"(oldfd), "c"(newfd) : "memory");
@@ -116,5 +120,17 @@ int getcwd(char* buf, int size) {
 int gettime(int* time_arr) {
     int ret;
     asm volatile("int $0x80" : "=a"(ret) : "a"(16), "b"(time_arr) : "memory");
+    return ret;
+}
+
+int kill(unsigned int pid, int signal) {
+    int ret;
+    asm volatile("int $0x80" : "=a"(ret) : "a"(23), "b"(pid), "c"(signal) : "memory");
+    return ret;
+}
+
+int get_processes(void* buffer, int max_count) {
+    int ret;
+    asm volatile("int $0x80" : "=a"(ret) : "a"(24), "b"(buffer), "c"(max_count) : "memory");
     return ret;
 }

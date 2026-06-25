@@ -61,6 +61,7 @@ static int devfs_delete_file(const char* path) {
 }
 
 static int devfs_list_dir(const char* path, char* output, unsigned int output_size, int detailed) {
+    (void)output_size;
     if (path[0] == '\0' || strcmp(path, "/") == 0) {
         if (detailed) {
             strcat(output, "2026-01-01 00:00  0  tty0\n");

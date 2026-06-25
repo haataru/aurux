@@ -27,6 +27,7 @@ struct task {
     unsigned int pending_signals;
     unsigned int heap_start;
     unsigned int heap_end;
+    char name[32];
 };
 
 void tasking_init(void);
@@ -39,6 +40,8 @@ void sleep(unsigned int ms);
 void sleep_on_io(void* io_obj);
 void wakeup_tasks_waiting_for_io(void* io_obj);
 void yield(void);
+int task_kill(unsigned int pid, int signal);
+int task_get_processes(void* buf, int max_count);
 
 unsigned int timer_handler(unsigned int esp);
 

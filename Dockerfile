@@ -6,11 +6,12 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     gcc-i686-linux-gnu \
     binutils-i686-linux-gnu \
-    qemu-system-x86 \
     make \
     dosfstools \
     mtools \
+    sparse \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 CMD ["make"]
+

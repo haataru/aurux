@@ -5,8 +5,8 @@ CC = i686-linux-gnu-gcc
 AS = i686-linux-gnu-as
 LD = i686-linux-gnu-ld
 
-CFLAGS = -ffreestanding -nostdlib -Wall -Wextra -Isrc -std=gnu99 -g -m32
-ASFLAGS = --32
+CFLAGS = -ffreestanding -nostdlib -Wall -Wextra -Werror -Isrc -std=gnu99 -g -m32
+ASFLAGS = --32 --fatal-warnings
 LDFLAGS = -T src/kernel/link.ld -Map=$(BUILD_DIR)/kernel.map -m elf_i386
 
 BUILD_DIR = build
@@ -29,7 +29,7 @@ SHELL_ELF = $(BUILD_DIR)/shell.elf
 # Output ELFs
 USER_BIN_ELFS = $(patsubst src/%.c, $(BUILD_DIR)/bin/%.elf, $(USER_BIN_C_SRCS))
 
-.PHONY: all clean run dirs
+.PHONY: all clean run dirs check debug
 
 all: dirs $(IMAGE)
 
@@ -39,10 +39,10 @@ dirs:
 	@mkdir -p $(sort $(dir $(KERNEL_OBJS) $(USER_LIB_OBJS) $(USER_BIN_OBJS) $(ASM_OBJ)))
 
 $(IMAGE): $(KERNEL) $(SHELL_ELF) $(USER_BIN_ELFS)
-	if [ ! -f $(IMAGE) ]; then \
-		dd if=/dev/zero of=$(IMAGE) bs=1M count=64; \
-		mkfs.vfat -F 32 $(IMAGE); \
-	fi
+	@rm -f $(IMAGE)
+	@mkdir -p build
+	dd if=/dev/zero of=$(IMAGE) bs=1M count=64
+	mkfs.vfat -F 32 $(IMAGE)
 	mmd -i $(IMAGE) ::/bin || true
 	echo "Hello from FAT32 real disk!" > $(BUILD_DIR)/message.txt
 	mcopy -o -i $(IMAGE) $(BUILD_DIR)/message.txt ::message.txt
@@ -69,6 +69,24 @@ $(BUILD_DIR)/src/boot/boot.o: src/boot/boot.asm
 
 run: $(IMAGE)
 	qemu-system-i386 -kernel $(KERNEL) -hda $(IMAGE)
+
+debug: $(IMAGE)
+	qemu-system-i386 -s -S -kernel $(KERNEL) -hda $(IMAGE)
+
+check:
+	@echo "Checking compilation and linkage (-Werror)..."
+	@$(MAKE) clean && $(MAKE) all
+	@echo "Checking for undefined symbols in ELF files..."
+	@for f in $(KERNEL) $(SHELL_ELF) $(USER_BIN_ELFS); do \
+		if nm $$f | grep -q " U "; then echo "Undefined symbol in $$f"; nm $$f | grep " U "; exit 1; fi; \
+	done
+	@echo "Running Sparse on all C files..."
+	@for file in $$(find src -name "*.c"); do \
+		echo "Checking $$file"; \
+		sparse -m32 -Wbitwise -Wcontext -Wdecl -Werror -Isrc $$file || exit 1; \
+	done
+	@echo "All static checks passed perfectly."
+
 
 clean:
 	rm -rf $(BUILD_DIR)

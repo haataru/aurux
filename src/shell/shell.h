@@ -6,5 +6,6 @@
 void shell_init(void);
 void shell_run(void);
 int shell_execute(const char* cmd);
+int commands_execute(const char* cmd);
 
 #endif

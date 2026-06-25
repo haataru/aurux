@@ -1,4 +1,12 @@
 #include "syscall.h"
+#include "kernel.h"
+
+extern int task_fork(unsigned int esp);
+extern int elf_exec(const char* filename, const char* args, struct registers* regs);
+extern void sleep(unsigned int ms);
+extern int task_kill(unsigned int pid, int signal);
+extern int task_get_processes(void* buffer, int max_count);
+extern struct task* current_task;
 #include "../drivers/vga/vga.h"
 #include "task.h"
 #include "../memory/paging.h"
@@ -150,18 +158,20 @@ void syscall_handler(unsigned int esp) {
             regs->eax = fs_change_dir((const char*)arg1);
             break;
         case 14:
-            if (!validate_user_ptr((void*)arg1, arg2)) {
-                destroy_current_process();
-                break;
-            }
-            const char* cwd = fs_get_cwd();
-            int len = 0;
-            while (cwd[len] != '\0') len++;
-            if (len >= (int)arg2) {
-                regs->eax = -1;
-            } else {
-                for(int i=0; i<=len; i++) ((char*)arg1)[i] = cwd[i];
-                regs->eax = 0;
+            {
+                if (!validate_user_ptr((void*)arg1, arg2)) {
+                    destroy_current_process();
+                    break;
+                }
+                const char* cwd = fs_get_cwd();
+                int len = 0;
+                while (cwd[len] != '\0') len++;
+                if (len >= (int)arg2) {
+                    regs->eax = -1;
+                } else {
+                    for(int i=0; i<=len; i++) ((char*)arg1)[i] = cwd[i];
+                    regs->eax = 0;
+                }
             }
             break;
         case 15:
@@ -191,7 +201,6 @@ void syscall_handler(unsigned int esp) {
             regs->eax = fs_pipe((int*)arg1);
             break;
         case 18:
-            extern int task_fork(unsigned int esp);
             regs->eax = task_fork(esp);
             break;
         case 19:
@@ -203,12 +212,10 @@ void syscall_handler(unsigned int esp) {
                 destroy_current_process();
                 break;
             }
-            extern int elf_exec(const char* filename, const char* args, struct registers* regs);
             regs->eax = elf_exec((const char*)arg1, (const char*)arg2, regs);
             break;
         case 20: // sys_brk
             {
-                extern struct task* current_task;
                 if (arg1 == 0) {
                     regs->eax = current_task->heap_end;
                 } else if (arg1 >= current_task->heap_start) {
@@ -246,6 +253,20 @@ void syscall_handler(unsigned int esp) {
             break;
         case 21: // sys_dup2
             regs->eax = fs_dup2(arg1, arg2);
+            break;
+        case 22: // sys_sleep
+            sleep(arg1);
+            regs->eax = 0;
+            break;
+        case 23: // sys_kill
+            regs->eax = task_kill(arg1, arg2);
+            break;
+        case 24: // sys_get_processes
+            if (!validate_user_ptr((void*)arg1, arg2 * 40)) { // 40 bytes per process_info struct (4+4+32)
+                regs->eax = -1;
+                break;
+            }
+            regs->eax = task_get_processes((void*)arg1, arg2);
             break;
         default:
             vga_print("Unknown syscall!\n");

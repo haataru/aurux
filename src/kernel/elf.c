@@ -125,6 +125,14 @@ int elf_load(const char* filename) {
 }
 
 int elf_exec(const char* filename, const char* args, struct registers* regs) {
+    extern struct task* current_task;
+    int fn_len = strlen(filename);
+    if (fn_len > 31) fn_len = 31;
+    for (int i = 0; i < fn_len; i++) {
+        current_task->name[i] = filename[i];
+    }
+    current_task->name[fn_len] = '\0';
+
     int fd = fs_open(filename);
     if (fd < 0) {
         return -1;

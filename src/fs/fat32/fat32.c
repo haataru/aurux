@@ -83,7 +83,7 @@ static int fat32_find_entry_in_dir(unsigned int dir_cluster, const char* target_
                 }
                 
                 char name[256];
-                int n = 0;
+
                 int is_match = 0;
                 
                 if (lfn_active && fat32_lfn_checksum((unsigned char*)dir[j].name) == expected_checksum) {
@@ -444,7 +444,7 @@ static int fat32_allocate_dir_entries(unsigned int dir_cluster, struct fat32_dir
     unsigned int prev_cluster = 0;
     
     int free_count = 0;
-    unsigned int start_cluster = 0;
+
     unsigned int start_sector_idx = 0;
     unsigned int start_entry_idx = 0;
     
@@ -457,7 +457,6 @@ static int fat32_allocate_dir_entries(unsigned int dir_cluster, struct fat32_dir
             for (unsigned int j = 0; j < 512 / sizeof(struct fat32_dir_entry); j++) {
                 if (dir[j].name[0] == 0x00 || dir[j].name[0] == (char)0xE5) {
                     if (free_count == 0) {
-                        start_cluster = cluster;
                         start_sector_idx = first_sector_of_cluster + i;
                         start_entry_idx = j;
                     }
@@ -465,7 +464,7 @@ static int fat32_allocate_dir_entries(unsigned int dir_cluster, struct fat32_dir
                     
                     if (free_count == count) {
                         // Write the entries starting from start_cluster/sector/entry.
-                        unsigned int c_cluster = start_cluster;
+
                         unsigned int c_sector_idx = start_sector_idx;
                         unsigned int c_entry_idx = start_entry_idx;
                         
@@ -561,7 +560,7 @@ int fat32_create_file(const char* filename, unsigned char attr) {
     int name_len = strlen(target_name);
     int lfn_count = (name_len + 12) / 13; // 13 characters per LFN entry.
     
-    struct fat32_dir_entry entries[lfn_count + 1];
+    struct fat32_dir_entry entries[32]; // Max LFN entries is ~20, plus 1 for main entry
     unsigned char chksum = fat32_lfn_checksum((unsigned char*)main_entry.name);
     
     for (int i = 0; i < lfn_count; i++) {

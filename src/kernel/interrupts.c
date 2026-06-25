@@ -2,6 +2,7 @@
 #include "kernel.h"
 
 
+
 struct idt_entry {
     unsigned short offset_low;
     unsigned short selector;

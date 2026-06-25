@@ -15,7 +15,21 @@ void ata_init(void) {
     vga_print("ATA PIO Primary Master initialized.\n");
 }
 
+static volatile int ata_lock = 0;
+
+static void acquire_ata_lock() {
+    while (__sync_lock_test_and_set(&ata_lock, 1)) {
+        extern void yield(void);
+        yield();
+    }
+}
+
+static void release_ata_lock() {
+    __sync_lock_release(&ata_lock);
+}
+
 int ata_read_sector(unsigned int lba, unsigned char* buffer) {
+    acquire_ata_lock();
     ata_wait_bsy();
 
     // Select drive and send highest 4 bits of LBA
@@ -38,6 +52,7 @@ int ata_read_sector(unsigned int lba, unsigned char* buffer) {
         buffer[i * 2 + 1] = (unsigned char)(word >> 8);
     }
     
+    release_ata_lock();
     return 0;
 }
 
@@ -49,6 +64,7 @@ int ata_read_sectors(unsigned int lba, unsigned char* buffer, unsigned int count
 }
 
 int ata_write_sector(unsigned int lba, const unsigned char* buffer) {
+    acquire_ata_lock();
     ata_wait_bsy();
 
     outb(ATA_PRIMARY_DRV_HEAD, 0xE0 | ((lba >> 24) & 0x0F));
@@ -71,6 +87,7 @@ int ata_write_sector(unsigned int lba, const unsigned char* buffer) {
     outb(ATA_PRIMARY_COMM_STAT, ATA_CMD_CACHE_FLUSH);
     ata_wait_bsy();
     
+    release_ata_lock();
     return 0;
 }
 
