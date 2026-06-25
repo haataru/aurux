@@ -16,6 +16,7 @@ void paging_init(void);
 void vmm_map_page(unsigned int virt_addr, unsigned int phys_addr, unsigned int flags);
 void vmm_map_page_ex(unsigned int* page_dir, unsigned int virt_addr, unsigned int phys_addr, unsigned int flags);
 unsigned int* create_address_space(void);
+unsigned int* clone_address_space(unsigned int* current_pd);
 void vmm_unmap_page(unsigned int virt_addr);
 void page_fault_handler(unsigned int error_code, unsigned int faulting_address);
 

@@ -24,12 +24,30 @@ static int read(int fd, char* buf, int count) {
     return ret;
 }
 
-static int spawn(const char* path) {
+static int fork(void) {
     int pid;
     asm volatile(
         "int $0x80"
-        : "=a"(pid) : "a"(4), "b"(path) : "memory"
+        : "=a"(pid) : "a"(18) : "memory"
     );
+    return pid;
+}
+
+static int exec(const char* path) {
+    int ret;
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret) : "a"(19), "b"(path) : "memory"
+    );
+    return ret;
+}
+
+static int spawn(const char* path) {
+    int pid = fork();
+    if (pid == 0) {
+        exec(path);
+        exit(1);
+    }
     return pid;
 }
 
@@ -175,10 +193,6 @@ void _start() {
         }
         
         if (strcmp(cmd, "help") == 0) {
-            print("\033[96m  __ _ _   _ _ __ _   ___  __\033[0m\n");
-            print("\033[96m / _` | | | | '__| | | \\ \\/ /\033[0m\n");
-            print("\033[96m| (_| | |_| | |  | |_| |>  < \033[0m\n");
-            print("\033[96m \\__,_|\\__,_|_|   \\__,_/_/\\_\\\033[0m\n\n");
             print("\033[93mBuilt-in Commands:\033[0m\n");
             print("Available commands:\n");
             print("  help      - Show this message\n");

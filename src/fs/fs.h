@@ -32,12 +32,13 @@ struct mount_point {
 
 typedef struct {
     int used;
+    int refcount;
     char path[256];
     unsigned int offset;
     struct fs_driver* driver;
     void* internal_data;
     int mode; // 0 = read/write, 1 = read-only, 2 = write-only
-} file_descriptor_t;
+} global_file_descriptor_t;
 
 int fs_mount(const char* prefix, struct fs_driver* driver);
 struct fs_driver* fs_get_driver(const char* path, const char** out_relative_path);

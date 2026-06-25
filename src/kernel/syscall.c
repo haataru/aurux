@@ -5,22 +5,7 @@
 #include "../fs/fs.h"
 #include "../drivers/rtc/rtc.h"
 
-struct registers {
-    unsigned int edi;
-    unsigned int esi;
-    unsigned int ebp;
-    unsigned int esp;
-    unsigned int ebx;
-    unsigned int edx;
-    unsigned int ecx;
-    unsigned int eax;
-    // Hardware-pushed registers during interrupt.
-    unsigned int eip;
-    unsigned int cs;
-    unsigned int eflags;
-    unsigned int useresp;
-    unsigned int ss;
-};
+// struct registers moved to syscall.h
 
 static int validate_user_ptr(const void* ptr, unsigned int size) {
     unsigned int addr = (unsigned int)ptr;
@@ -232,6 +217,18 @@ void syscall_handler(unsigned int esp) {
                 break;
             }
             regs->eax = fs_pipe((int*)arg1);
+            break;
+        case 18:
+            extern int task_fork(void);
+            regs->eax = task_fork();
+            break;
+        case 19:
+            if (!validate_user_string((const char*)arg1)) {
+                destroy_current_process();
+                break;
+            }
+            extern int elf_exec(const char* filename, struct registers* regs);
+            regs->eax = elf_exec((const char*)arg1, regs);
             break;
         default:
             vga_print("Unknown syscall!\n");

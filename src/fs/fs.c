@@ -3,10 +3,11 @@
 #include "fat32/fat32.h"
 #include "../memory/memory.h"
 #include "pipe.h"
+#include "../kernel/task.h"
 
 static char current_path[256];
 
-static file_descriptor_t fd_table[MAX_OPEN_FILES];
+static global_file_descriptor_t global_fd_table[MAX_OPEN_FILES];
 static struct mount_point mount_points[MAX_MOUNT_POINTS];
 
 int fs_mount(const char* prefix, struct fs_driver* driver) {
@@ -127,9 +128,10 @@ void fs_init(void) {
     
     strcpy(current_path, "/");
     for (int i = 0; i < MAX_OPEN_FILES; i++) {
-        fd_table[i].used = 0;
-        fd_table[i].internal_data = 0;
-        fd_table[i].mode = 0;
+        global_fd_table[i].used = 0;
+        global_fd_table[i].refcount = 0;
+        global_fd_table[i].internal_data = 0;
+        global_fd_table[i].mode = 0;
     }
     
     fs_mount("/", &fat32_fs_driver);
@@ -138,16 +140,25 @@ void fs_init(void) {
 
 int fs_pipe(int fd_array[2]) {
     extern struct fs_driver pipe_fs_driver;
+    extern struct task* current_task;
     
-    int r_fd = -1, w_fd = -1;
+    int g_r = -1, g_w = -1;
     for (int i = 0; i < MAX_OPEN_FILES; i++) {
-        if (!fd_table[i].used) {
-            if (r_fd == -1) r_fd = i;
-            else if (w_fd == -1) { w_fd = i; break; }
+        if (!global_fd_table[i].used) {
+            if (g_r == -1) g_r = i;
+            else if (g_w == -1) { g_w = i; break; }
         }
     }
+    if (g_r == -1 || g_w == -1) return -1;
     
-    if (r_fd == -1 || w_fd == -1) return -1;
+    int l_r = -1, l_w = -1;
+    for (int i = 0; i < 16; i++) {
+        if (!current_task->fd_table[i]) {
+            if (l_r == -1) l_r = i;
+            else if (l_w == -1) { l_w = i; break; }
+        }
+    }
+    if (l_r == -1 || l_w == -1) return -1;
     
     pipe_t* p = (pipe_t*)kmalloc(sizeof(pipe_t));
     if (!p) return -1;
@@ -157,22 +168,27 @@ int fs_pipe(int fd_array[2]) {
     p->readers = 1;
     p->writers = 1;
     
-    fd_table[r_fd].used = 1;
-    fd_table[r_fd].offset = (unsigned int)p;
-    fd_table[r_fd].driver = &pipe_fs_driver;
-    fd_table[r_fd].internal_data = p;
-    fd_table[r_fd].mode = 1; // read-only
-    strcpy(fd_table[r_fd].path, "pipe");
+    global_fd_table[g_r].used = 1;
+    global_fd_table[g_r].refcount = 1;
+    global_fd_table[g_r].offset = (unsigned int)p;
+    global_fd_table[g_r].driver = &pipe_fs_driver;
+    global_fd_table[g_r].internal_data = p;
+    global_fd_table[g_r].mode = 1; // read-only
+    strcpy(global_fd_table[g_r].path, "pipe");
     
-    fd_table[w_fd].used = 1;
-    fd_table[w_fd].offset = (unsigned int)p;
-    fd_table[w_fd].driver = &pipe_fs_driver;
-    fd_table[w_fd].internal_data = p;
-    fd_table[w_fd].mode = 2; // write-only
-    strcpy(fd_table[w_fd].path, "pipe");
+    global_fd_table[g_w].used = 1;
+    global_fd_table[g_w].refcount = 1;
+    global_fd_table[g_w].offset = (unsigned int)p;
+    global_fd_table[g_w].driver = &pipe_fs_driver;
+    global_fd_table[g_w].internal_data = p;
+    global_fd_table[g_w].mode = 2; // write-only
+    strcpy(global_fd_table[g_w].path, "pipe");
     
-    fd_array[0] = r_fd + 3; // +3 to avoid stdin/stdout/stderr
-    fd_array[1] = w_fd + 3;
+    current_task->fd_table[l_r] = &global_fd_table[g_r];
+    current_task->fd_table[l_w] = &global_fd_table[g_w];
+    
+    fd_array[0] = l_r + 3; // +3 to avoid stdin/stdout/stderr
+    fd_array[1] = l_w + 3;
     
     return 0;
 }
@@ -244,49 +260,83 @@ int fs_open(const char* path) {
     
     if (driver->open(rel_path) < 0) return -1;
     
-    for (int i = 0; i < MAX_OPEN_FILES; i++) {
-        if (!fd_table[i].used) {
-            fd_table[i].used = 1;
-            strcpy(fd_table[i].path, rel_path);
-            fd_table[i].offset = 0;
-            fd_table[i].driver = driver;
-            return i;
+    extern struct task* current_task;
+    int l_fd = -1;
+    for (int i = 0; i < 16; i++) {
+        if (!current_task->fd_table[i]) {
+            l_fd = i;
+            break;
         }
     }
-    return -1;
+    if (l_fd == -1) return -1;
+    
+    int g_fd = -1;
+    for (int i = 0; i < MAX_OPEN_FILES; i++) {
+        if (!global_fd_table[i].used) {
+            g_fd = i;
+            break;
+        }
+    }
+    if (g_fd == -1) return -1;
+    
+    global_fd_table[g_fd].used = 1;
+    global_fd_table[g_fd].refcount = 1;
+    strcpy(global_fd_table[g_fd].path, rel_path);
+    global_fd_table[g_fd].offset = 0;
+    global_fd_table[g_fd].driver = driver;
+    global_fd_table[g_fd].internal_data = 0;
+    global_fd_table[g_fd].mode = 0;
+    
+    current_task->fd_table[l_fd] = &global_fd_table[g_fd];
+    return l_fd;
 }
 
 int fs_read(int fd, char* buf, size_t size) {
-    if (fd < 0 || fd >= MAX_OPEN_FILES || !fd_table[fd].used) return -1;
-    struct fs_driver* driver = fd_table[fd].driver;
+    extern struct task* current_task;
+    if (fd < 0 || fd >= 16 || !current_task->fd_table[fd]) return -1;
+    global_file_descriptor_t* gfd = (global_file_descriptor_t*)current_task->fd_table[fd];
+    
+    struct fs_driver* driver = gfd->driver;
     if (!driver) return -1;
     
-    int bytes = driver->read(fd_table[fd].path, buf, size, fd_table[fd].offset);
-    if (bytes > 0) fd_table[fd].offset += bytes;
+    int bytes = driver->read(gfd->path, buf, size, gfd->offset);
+    if (bytes > 0) gfd->offset += bytes;
     return bytes;
 }
 
 int fs_write(int fd, const char* data, size_t size) {
-    if (fd < 0 || fd >= MAX_OPEN_FILES || !fd_table[fd].used) return -1;
-    struct fs_driver* driver = fd_table[fd].driver;
+    extern struct task* current_task;
+    if (fd < 0 || fd >= 16 || !current_task->fd_table[fd]) return -1;
+    global_file_descriptor_t* gfd = (global_file_descriptor_t*)current_task->fd_table[fd];
+    struct fs_driver* driver = gfd->driver;
     
-    int bytes = driver->write(fd_table[fd].path, data, size, fd_table[fd].offset);
-    if (bytes > 0) fd_table[fd].offset += bytes;
+    int bytes = driver->write(gfd->path, data, size, gfd->offset);
+    if (bytes > 0) gfd->offset += bytes;
     return bytes;
 }
 
 int fs_seek(int fd, unsigned int offset) {
-    if (fd < 0 || fd >= MAX_OPEN_FILES || !fd_table[fd].used) return -1;
-    fd_table[fd].offset = offset;
+    extern struct task* current_task;
+    if (fd < 0 || fd >= 16 || !current_task->fd_table[fd]) return -1;
+    global_file_descriptor_t* gfd = (global_file_descriptor_t*)current_task->fd_table[fd];
+    gfd->offset = offset;
     return 0;
 }
 
 int fs_close(int fd) {
-    if (fd < 0 || fd >= MAX_OPEN_FILES || !fd_table[fd].used) return -1;
-    if (fd_table[fd].driver && fd_table[fd].driver->close) {
-        fd_table[fd].driver->close(fd_table[fd].offset, fd_table[fd].internal_data, fd_table[fd].mode);
+    extern struct task* current_task;
+    if (fd < 0 || fd >= 16 || !current_task->fd_table[fd]) return -1;
+    global_file_descriptor_t* gfd = (global_file_descriptor_t*)current_task->fd_table[fd];
+    
+    current_task->fd_table[fd] = 0;
+    
+    gfd->refcount--;
+    if (gfd->refcount <= 0) {
+        if (gfd->driver && gfd->driver->close) {
+            gfd->driver->close(gfd->offset, gfd->internal_data, gfd->mode);
+        }
+        gfd->used = 0;
     }
-    fd_table[fd].used = 0;
     return 0;
 }
 

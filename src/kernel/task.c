@@ -3,7 +3,7 @@
 
 extern volatile unsigned int timer_ticks;
 
-static struct task* current_task = NULL;
+struct task* current_task = NULL;
 static struct task* ready_queue = NULL;
 static unsigned int next_task_id = 1;
 static struct task* task_to_free = NULL;
@@ -19,6 +19,8 @@ void tasking_init(void) {
     main_task->sleep_ticks = 0;
     main_task->waiting_for_pid = 0;
     main_task->waiting_for_io = 0;
+    main_task->pending_signals = 0;
+    for (int i = 0; i < 16; i++) main_task->fd_table[i] = 0;
     main_task->next = main_task; // Circular queue implementation for round-robin scheduling.
     
     current_task = main_task;
@@ -36,6 +38,8 @@ void create_task(void (*entry_point)(void)) {
     new_task->sleep_ticks = 0;
     new_task->waiting_for_pid = 0;
     new_task->waiting_for_io = 0;
+    new_task->pending_signals = 0;
+    for (int i = 0; i < 16; i++) new_task->fd_table[i] = 0;
     
     unsigned int* stack = (unsigned int*)pmm_alloc_page();
     
@@ -79,6 +83,8 @@ void create_user_task(void (*entry_point)(void)) {
     new_task->sleep_ticks = 0;
     new_task->waiting_for_pid = 0;
     new_task->waiting_for_io = 0;
+    new_task->pending_signals = 0;
+    for (int i = 0; i < 16; i++) new_task->fd_table[i] = 0;
     
     unsigned int* kstack = (unsigned int*)pmm_alloc_page();
     unsigned int* ustack = (unsigned int*)pmm_alloc_page();
@@ -124,6 +130,8 @@ struct task* create_process(unsigned int* page_dir, unsigned int entry_point, un
     new_task->sleep_ticks = 0;
     new_task->waiting_for_pid = 0;
     new_task->waiting_for_io = 0;
+    new_task->pending_signals = 0;
+    for (int i = 0; i < 16; i++) new_task->fd_table[i] = 0;
     
     unsigned int* kstack = (unsigned int*)pmm_alloc_page();
     unsigned int* stack_top = (unsigned int*)((unsigned int)kstack + 4096);
@@ -190,9 +198,21 @@ unsigned int timer_handler(unsigned int esp) {
         return esp;
     }
     
-    if (current_task->state != TASK_DEAD) {
-        current_task->esp = esp;
-    }
+        if (current_task->pending_signals & 2) { // SIGINT
+            current_task->state = TASK_DEAD;
+            task_to_free = current_task;
+            
+            struct task* iter2 = current_task->next;
+            do {
+                if (iter2->waiting_for_pid == current_task->id) {
+                    iter2->waiting_for_pid = 0;
+                    iter2->state = TASK_READY;
+                }
+                iter2 = iter2->next;
+            } while (iter2 != current_task);
+        } else {
+            current_task->esp = esp;
+        }
     
     struct task* next_task = current_task->next;
     
@@ -325,4 +345,62 @@ void wakeup_tasks_waiting_for_io(void* io_obj) {
         iter = iter->next;
     } while (iter != ready_queue);
     asm volatile("sti");
+}
+
+int task_fork(void) {
+    asm volatile("cli");
+    struct task* parent = current_task;
+    
+    extern unsigned int* clone_address_space(unsigned int* current_pd);
+    unsigned int* new_pd = clone_address_space(parent->page_dir);
+    if (!new_pd) {
+        asm volatile("sti");
+        return -1;
+    }
+    
+    struct task* child = (struct task*)kmalloc(sizeof(struct task));
+    child->id = next_task_id++;
+    child->page_dir = new_pd;
+    child->state = TASK_READY;
+    child->sleep_ticks = 0;
+    child->waiting_for_pid = 0;
+    child->waiting_for_io = 0;
+    child->pending_signals = 0;
+    
+    for (int i = 0; i < 16; i++) {
+        child->fd_table[i] = parent->fd_table[i];
+        if (child->fd_table[i]) {
+            int* refcount = (int*)child->fd_table[i] + 1; // Assuming refcount is the second field (after int used)
+            (*refcount)++;
+        }
+    }
+    
+    unsigned int new_kstack_phys = (unsigned int)pmm_alloc_page();
+    unsigned int scratch_vaddr = 0xE0000000;
+    vmm_map_page_ex(parent->page_dir, scratch_vaddr, new_kstack_phys, PAGE_PRESENT | PAGE_WRITE);
+    asm volatile("invlpg (%0)" :: "r"(scratch_vaddr) : "memory");
+    
+    unsigned int parent_kstack_start = (parent->kernel_stack - 4096);
+    extern void* memcpy(void* dest, const void* src, size_t n);
+    memcpy((void*)scratch_vaddr, (void*)parent_kstack_start, 4096);
+    
+    unsigned int esp_offset = parent->esp - parent_kstack_start;
+    child->kernel_stack = new_kstack_phys + 4096;
+    child->esp = new_kstack_phys + esp_offset;
+    
+    unsigned int* child_regs_eax = (unsigned int*)(scratch_vaddr + esp_offset + 28);
+    *child_regs_eax = 0;
+    
+    vmm_map_page_ex(parent->page_dir, scratch_vaddr, 0, 0);
+    asm volatile("invlpg (%0)" :: "r"(scratch_vaddr) : "memory");
+    
+    struct task* last = ready_queue;
+    while (last->next != ready_queue) {
+        last = last->next;
+    }
+    last->next = child;
+    child->next = ready_queue;
+    
+    asm volatile("sti");
+    return child->id;
 }

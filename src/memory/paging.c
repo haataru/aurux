@@ -72,6 +72,44 @@ unsigned int* create_address_space(void) {
     return new_pd;
 }
 
+unsigned int* clone_address_space(unsigned int* current_pd) {
+    unsigned int* new_pd = (unsigned int*)pmm_alloc_page();
+    if (!new_pd) return 0;
+    
+    for (int i = 0; i < 1024; i++) {
+        new_pd[i] = 0x02; 
+    }
+    
+    // Copy kernel PDEs
+    for (int i = 0; i < 4; i++) {
+        new_pd[i] = current_pd[i];
+    }
+    
+    // Copy user PDEs
+    for (int i = 4; i < 1024; i++) {
+        if (current_pd[i] & PAGE_PRESENT) {
+            unsigned int* parent_pt = (unsigned int*)(current_pd[i] & ~0xFFF);
+            unsigned int* new_pt = (unsigned int*)pmm_alloc_page();
+            
+            for (int j = 0; j < 1024; j++) {
+                if (parent_pt[j] & PAGE_PRESENT) {
+                    unsigned int phys = (unsigned int)pmm_alloc_page();
+                    unsigned int flags = parent_pt[j] & 0xFFF;
+                    new_pt[j] = phys | flags;
+                    
+                    unsigned int parent_phys = parent_pt[j] & ~0xFFF;
+                    extern void* memcpy(void* dest, const void* src, size_t n);
+                    memcpy((void*)phys, (void*)parent_phys, 4096);
+                } else {
+                    new_pt[j] = 0;
+                }
+            }
+            new_pd[i] = ((unsigned int)new_pt) | (current_pd[i] & 0xFFF);
+        }
+    }
+    return new_pd;
+}
+
 void vmm_unmap_page(unsigned int virt_addr) {
     unsigned int pd_index = virt_addr >> 22;
     unsigned int pt_index = (virt_addr >> 12) & 0x03FF;

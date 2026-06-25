@@ -41,6 +41,8 @@ typedef struct {
 #define PT_SHLIB   5
 #define PT_PHDR    6
 
+struct registers;
 int elf_load(const char* filename);
+int elf_exec(const char* filename, struct registers* regs);
 
 #endif

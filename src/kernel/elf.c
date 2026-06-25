@@ -5,9 +5,9 @@
 #include "../memory/paging.h"
 #include "../drivers/vga/vga.h"
 #include "../lib/lib.h"
+#include "syscall.h"
 
 int elf_load(const char* filename) {
-    char* file_buffer = (char*)pmm_alloc_page(); // Temporary 4KB buffer allocated; needs adjustment for larger files.
     // TODO: Allocate sufficient contiguous physical pages or read headers initially.
     int fd = fs_open(filename);
     if (fd < 0) {
@@ -85,5 +85,92 @@ int elf_load(const char* filename) {
     
     struct task* t = create_process(new_pd, ehdr->e_entry, user_stack_top - 4);
     
-    return t ? t->id : -1;
+    kfree(elf_buf);
+    return t ? (int)t->id : -1;
+}
+
+int elf_exec(const char* filename, struct registers* regs) {
+    int fd = fs_open(filename);
+    if (fd < 0) {
+        vga_print("EXEC: Failed to open file.\n");
+        return -1;
+    }
+    
+    char* elf_buf = (char*)kmalloc(32768); 
+    int bytes = fs_read(fd, elf_buf, 32768);
+    fs_close(fd);
+    if (bytes <= 0) {
+        kfree(elf_buf);
+        return -1;
+    }
+    
+    Elf32_Ehdr* ehdr = (Elf32_Ehdr*)elf_buf;
+    if (*(unsigned int*)ehdr->e_ident != ELF_MAGIC || ehdr->e_type != 2) {
+        kfree(elf_buf);
+        return -1;
+    }
+    
+    unsigned int* new_pd = create_address_space();
+    if (!new_pd) {
+        kfree(elf_buf);
+        return -1;
+    }
+    
+    unsigned int current_pd;
+    asm volatile("mov %%cr3, %0" : "=r"(current_pd));
+    asm volatile("mov %0, %%cr3" :: "r"(new_pd));
+    
+    Elf32_Phdr* phdr = (Elf32_Phdr*)(elf_buf + ehdr->e_phoff);
+    for (int i = 0; i < ehdr->e_phnum; i++) {
+        if (phdr[i].p_type == PT_LOAD) {
+            unsigned int vaddr = phdr[i].p_vaddr;
+            unsigned int memsz = phdr[i].p_memsz;
+            unsigned int filesz = phdr[i].p_filesz;
+            unsigned int offset = phdr[i].p_offset;
+            
+            for (unsigned int p = 0; p < memsz; p += PAGE_SIZE) {
+                unsigned int phys = (unsigned int)pmm_alloc_page();
+                vmm_map_page_ex(new_pd, vaddr + p, phys, PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
+            }
+            
+            memcpy((void*)vaddr, elf_buf + offset, filesz);
+            
+            if (memsz > filesz) {
+                memset((void*)(vaddr + filesz), 0, memsz - filesz);
+            }
+        }
+    }
+    
+    unsigned int user_stack_top = 0xB0000000;
+    unsigned int user_stack_phys = (unsigned int)pmm_alloc_page();
+    vmm_map_page_ex(new_pd, user_stack_top - PAGE_SIZE, user_stack_phys, PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
+    
+    asm volatile("mov %0, %%cr3" :: "r"(current_pd));
+    
+    extern struct task* current_task;
+    unsigned int* old_pd = current_task->page_dir;
+    
+    current_task->page_dir = new_pd;
+    asm volatile("mov %0, %%cr3" :: "r"(new_pd));
+    
+    for (int i = 4; i < 1024; i++) {
+        if (old_pd[i] & PAGE_PRESENT) {
+            unsigned int* pt = (unsigned int*)(old_pd[i] & ~0xFFF);
+            for (int j = 0; j < 1024; j++) {
+                if (pt[j] & PAGE_PRESENT) {
+                    pmm_free_page((void*)(pt[j] & ~0xFFF));
+                }
+            }
+            pmm_free_page((void*)pt);
+        }
+    }
+    pmm_free_page((void*)old_pd);
+    
+    kfree(elf_buf);
+    
+    regs->eip = ehdr->e_entry;
+    regs->useresp = user_stack_top - 4;
+    regs->eax = 0;
+    
+    return 0;
 }

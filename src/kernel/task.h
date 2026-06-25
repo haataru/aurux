@@ -23,6 +23,8 @@ struct task {
     unsigned int waiting_for_pid;
     void* waiting_for_io;
     struct task* next;
+    void* fd_table[16]; // Pointers to global_file_descriptor_t
+    unsigned int pending_signals;
 };
 
 void tasking_init(void);

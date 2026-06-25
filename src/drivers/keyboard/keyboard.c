@@ -1,6 +1,7 @@
 
 #include "keyboard.h"
 #include "../../kernel/kernel.h"
+#include "../../kernel/task.h"
 
 #define KEY_BUFFER_SIZE 256
 
@@ -25,6 +26,7 @@ static int key_read_pos = 0;
 static int key_write_pos = 0;
 static int shift_pressed = 0;
 static int caps_lock = 0;
+int ctrl_pressed = 0;
 
 
 void keyboard_init(void) {
@@ -43,13 +45,17 @@ void keyboard_handler_main(void) {
         unsigned char key = scancode & 0x7F;
         if (key == 0x2A || key == 0x36) {
             shift_pressed = 0;
+        } else if (key == 0x1D) {
+            extern int ctrl_pressed;
+            ctrl_pressed = 0;
         }
     } else {
-    if (scancode == 0x2A || scancode == 0x36) {
-            // Left or right shift pressed
+        if (scancode == 0x2A || scancode == 0x36) {
             shift_pressed = 1;
+        } else if (scancode == 0x1D) {
+            extern int ctrl_pressed;
+            ctrl_pressed = 1;
         } else if (scancode == 0x3A) {
-            // Caps lock toggle
             caps_lock = !caps_lock;
         } else {
             char character;
@@ -59,7 +65,13 @@ void keyboard_handler_main(void) {
                 character = keymap_lower[scancode];
             }
             
-            if (character != 0) {
+            extern int ctrl_pressed;
+            if (ctrl_pressed && (character == 'c' || character == 'C')) {
+                extern struct task* current_task;
+                if (current_task && current_task->page_dir != 0) { // user task
+                    current_task->pending_signals |= 2; // SIGINT
+                }
+            } else if (character != 0) {
                 key_buffer[key_write_pos] = character;
                 key_write_pos = (key_write_pos + 1) % KEY_BUFFER_SIZE;
             }

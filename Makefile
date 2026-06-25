@@ -7,7 +7,7 @@ LD = i686-linux-gnu-ld
 
 CFLAGS = -ffreestanding -nostdlib -Wall -Wextra -Isrc -std=gnu99 -g -m32
 ASFLAGS = --32
-LDFLAGS = -T src/kernel/link.ld -Map=build/kernel.map -m elf_i386
+LDFLAGS = -T src/kernel/link.ld -Map=$(BUILD_DIR)/kernel.map -m elf_i386
 
 BUILD_DIR = build
 
