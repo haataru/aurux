@@ -1,10 +1,8 @@
-/* TurbanOS Command Shell */
 #include "shell.h"
 #include "../drivers/vga/vga.h"
 #include "../drivers/keyboard/keyboard.h"
 #include "../lib/lib.h"
 
-/* Shell state */
 static char input_buffer[SHELL_MAX_INPUT];
 static int input_pos = 0;
 static char history[SHELL_HISTORY_SIZE][SHELL_MAX_INPUT];
@@ -20,7 +18,7 @@ void shell_init(void) {
 static void add_to_history(const char* cmd) {
     if (cmd[0] == '\0') return;
     
-    /* Skip duplicates */
+    // Prevent duplicate history entries
     if (history_count > 0 && strcmp(history[history_count - 1], cmd) == 0) {
         return;
     }
@@ -30,7 +28,7 @@ static void add_to_history(const char* cmd) {
         history[history_count][SHELL_MAX_INPUT - 1] = '\0';
         history_count++;
     } else {
-        /* Shift buffer */
+        // Shift history buffer to make room for new command
         for (int i = 0; i < SHELL_HISTORY_SIZE - 1; i++) {
             strcpy(history[i], history[i + 1]);
         }
@@ -72,7 +70,6 @@ static void redraw_input_line(const char* buf, int cursor_pos) {
     vga_print(buf);
     input_pos = strlen(buf);
     
-    /* Position cursor */
     int current_x = vga_get_cursor_x();
     int target_x = cursor_pos;
     
@@ -88,17 +85,15 @@ static char process_key(char c, int* cursor_pos) {
     if (c == '\n') {
         vga_putchar('\n');
         input_buffer[input_pos] = '\0';
-        return 1;  /* Signal to execute */
+        return 1;  // Signal to execute the command
     } else if (c == '\b') {
         if (input_pos > 0 && *cursor_pos > 0) {
-            /* Remove character */
             for (int i = *cursor_pos - 1; i < input_pos - 1; i++) {
                 input_buffer[i] = input_buffer[i + 1];
             }
             input_pos--;
             input_buffer[input_pos] = '\0';
             
-            /* Update display */
             vga_putchar('\b');
             for (int i = *cursor_pos - 1; i < input_pos + 1; i++) {
                 if (i < input_pos) {
@@ -114,7 +109,6 @@ static char process_key(char c, int* cursor_pos) {
         }
     } else if (c >= 32 && c <= 126) {
         if (input_pos < SHELL_MAX_INPUT - 1) {
-            /* Insert at cursor */
             for (int i = input_pos; i > *cursor_pos; i--) {
                 input_buffer[i] = input_buffer[i - 1];
             }
@@ -122,13 +116,11 @@ static char process_key(char c, int* cursor_pos) {
             input_pos++;
             input_buffer[input_pos] = '\0';
             
-            /* Show new char */
             for (int i = *cursor_pos; i < input_pos; i++) {
                 vga_putchar(input_buffer[i]);
             }
             (*cursor_pos)++;
             
-            /* Return cursor */
             for (int i = *cursor_pos; i < input_pos; i++) {
                 vga_putchar('\b');
             }
@@ -141,7 +133,7 @@ static char process_key(char c, int* cursor_pos) {
 void shell_run(void) {
     shell_init();
     
-    vga_print("turbanOS v0.4\n");
+    vga_print("aurux v1.0\n");
     vga_print("Type 'help' for a list of commands.\n");
     
     int cursor_pos = 0;

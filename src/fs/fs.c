@@ -1,430 +1,378 @@
-/*
- * fs.c - In-memory filesystem implementation
- */
-
 #include "fs.h"
-#include "../memory/memory.h"
 #include "../lib/lib.h"
+#include "fat32/fat32.h"
+#include "../memory/memory.h"
+#include "pipe.h"
 
-/* Filesystem entries storage */
-static fs_entry_t entries[FS_MAX_FILES];
+static char current_path[256];
 
-/* Current working directory index (0 = root) */
-static int cwd = 0;
+static file_descriptor_t fd_table[MAX_OPEN_FILES];
+static struct mount_point mount_points[MAX_MOUNT_POINTS];
 
-/* Find empty entry */
-static int find_empty_entry(void) {
-    for (int i = 0; i < FS_MAX_FILES; i++) {
-        if (!entries[i].used) {
+int fs_mount(const char* prefix, struct fs_driver* driver) {
+    for (int i = 0; i < MAX_MOUNT_POINTS; i++) {
+        if (!mount_points[i].used) {
+            mount_points[i].used = 1;
+            strcpy(mount_points[i].prefix, prefix);
+            mount_points[i].driver = driver;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+struct fs_driver* fs_get_driver(const char* path, const char** out_relative_path) {
+    int best_match = -1;
+    int best_match_len = -1;
+    
+    for (int i = 0; i < MAX_MOUNT_POINTS; i++) {
+        if (mount_points[i].used) {
+            int len = strlen(mount_points[i].prefix);
+            if (strncmp(path, mount_points[i].prefix, len) == 0) {
+                if (path[len] == '/' || path[len] == '\0' || len == 1) {
+                    if (len > best_match_len) {
+                        best_match = i;
+                        best_match_len = len;
+                    }
+                }
+            }
+        }
+    }
+    
+    if (best_match >= 0) {
+        if (out_relative_path) {
+            *out_relative_path = path + best_match_len;
+            if (**out_relative_path == '/') (*out_relative_path)++;
+        }
+        return mount_points[best_match].driver;
+    }
+    
+    return NULL;
+}
+
+
+static int fat_open(const char* path) {
+    if (fat32_get_file_size(path) >= 0) return 0;
+    return -1;
+}
+static int fat_read(const char* path, char* buf, size_t size, unsigned int offset) {
+    int file_size = fat32_get_file_size(path);
+    if (file_size < 0) return -1;
+    
+    unsigned char* data = (unsigned char*)kmalloc(file_size + 512);
+    if (!data) return -1;
+    
+    if (fat32_read_file(path, data) < 0) {
+        kfree(data);
+        return -1;
+    }
+    
+    int to_read = size;
+    if (offset >= (unsigned int)file_size) to_read = 0;
+    else if (offset + size > (unsigned int)file_size) to_read = file_size - offset;
+    
+    for(int i = 0; i < to_read; i++) buf[i] = data[offset + i];
+    kfree(data);
+    return to_read;
+}
+static int fat_write(const char* path, const char* data, size_t size, unsigned int offset) {
+    int file_size = fat32_get_file_size(path);
+    if (file_size < 0) file_size = 0;
+    
+    unsigned int new_size = file_size;
+    if (offset + size > (unsigned int)file_size) new_size = offset + size;
+    
+    unsigned char* temp_buf = (unsigned char*)kmalloc(new_size + 512);
+    if (!temp_buf) return -1;
+    
+    if (file_size > 0) {
+        fat32_read_file(path, temp_buf);
+    }
+    
+    for(size_t i = 0; i < size; i++) temp_buf[offset + i] = data[i];
+    
+    int written = fat32_write_file(path, temp_buf, new_size);
+    kfree(temp_buf);
+    
+    if (written >= 0) return size;
+    return -1;
+}
+static int fat_create_file(const char* path) { return fat32_create_file(path, 0); }
+static int fat_create_dir(const char* path) { return fat32_create_file(path, 0x10); }
+static int fat_delete_file(const char* path) { return fat32_delete_file(path); }
+static int fat_list(const char* path, char* output, unsigned int output_size, int detailed) {
+    return fat32_list_dir(path, output, output_size, detailed);
+}
+static int fat_get_size(const char* path) { return fat32_get_file_size(path); }
+static int fat_is_dir(const char* path) { return fat32_is_dir(path); }
+
+static struct fs_driver fat32_fs_driver = {
+    .open = fat_open,
+    .read = fat_read,
+    .write = fat_write,
+    .create_file = fat_create_file,
+    .create_dir = fat_create_dir,
+    .delete_file = fat_delete_file,
+    .list_dir = fat_list,
+    .get_size = fat_get_size,
+    .is_dir = fat_is_dir
+};
+
+extern void devfs_init(void);
+
+void fs_init(void) {
+    fat32_init();
+    
+    for (int i = 0; i < MAX_MOUNT_POINTS; i++) mount_points[i].used = 0;
+    
+    strcpy(current_path, "/");
+    for (int i = 0; i < MAX_OPEN_FILES; i++) {
+        fd_table[i].used = 0;
+        fd_table[i].internal_data = 0;
+        fd_table[i].mode = 0;
+    }
+    
+    fs_mount("/", &fat32_fs_driver);
+    devfs_init();
+}
+
+int fs_pipe(int fd_array[2]) {
+    extern struct fs_driver pipe_fs_driver;
+    
+    int r_fd = -1, w_fd = -1;
+    for (int i = 0; i < MAX_OPEN_FILES; i++) {
+        if (!fd_table[i].used) {
+            if (r_fd == -1) r_fd = i;
+            else if (w_fd == -1) { w_fd = i; break; }
+        }
+    }
+    
+    if (r_fd == -1 || w_fd == -1) return -1;
+    
+    pipe_t* p = (pipe_t*)kmalloc(sizeof(pipe_t));
+    if (!p) return -1;
+    p->read_pos = 0;
+    p->write_pos = 0;
+    p->bytes_available = 0;
+    p->readers = 1;
+    p->writers = 1;
+    
+    fd_table[r_fd].used = 1;
+    fd_table[r_fd].offset = (unsigned int)p;
+    fd_table[r_fd].driver = &pipe_fs_driver;
+    fd_table[r_fd].internal_data = p;
+    fd_table[r_fd].mode = 1; // read-only
+    strcpy(fd_table[r_fd].path, "pipe");
+    
+    fd_table[w_fd].used = 1;
+    fd_table[w_fd].offset = (unsigned int)p;
+    fd_table[w_fd].driver = &pipe_fs_driver;
+    fd_table[w_fd].internal_data = p;
+    fd_table[w_fd].mode = 2; // write-only
+    strcpy(fd_table[w_fd].path, "pipe");
+    
+    fd_array[0] = r_fd + 3; // +3 to avoid stdin/stdout/stderr
+    fd_array[1] = w_fd + 3;
+    
+    return 0;
+}
+
+// Resolves a path against the current working directory.
+static void fs_resolve_path(const char* input_path, char* absolute_path) {
+    if (input_path[0] == '/') {
+        strcpy(absolute_path, input_path);
+    } else {
+        strcpy(absolute_path, current_path);
+        if (absolute_path[strlen(absolute_path) - 1] != '/') {
+            strcat(absolute_path, "/");
+        }
+        strcat(absolute_path, input_path);
+    }
+    
+    // Normalize the absolute path to handle . and .. directories.
+    char temp[256];
+    int t_idx = 0;
+    temp[0] = '/';
+    temp[1] = '\0';
+    t_idx = 1;
+    
+    int i = 0;
+    while (absolute_path[i] != '\0') {
+        if (absolute_path[i] == '/') {
+            i++;
+            continue;
+        }
+        
+        char token[64];
+        int tok_idx = 0;
+        while (absolute_path[i] != '\0' && absolute_path[i] != '/') {
+            token[tok_idx++] = absolute_path[i++];
+        }
+        token[tok_idx] = '\0';
+        
+        if (strcmp(token, ".") == 0) {
+            continue;
+        } else if (strcmp(token, "..") == 0) {
+            if (t_idx > 1) {
+                t_idx--;
+                while (t_idx > 0 && temp[t_idx-1] != '/') t_idx--;
+            }
+        } else {
+            for(int k=0; k<tok_idx; k++) {
+                temp[t_idx++] = token[k];
+            }
+            temp[t_idx++] = '/';
+        }
+    }
+    
+    if (t_idx > 1) {
+        temp[t_idx-1] = '\0'; // Remove trailing slash unless it is just the root directory.
+    } else {
+        temp[1] = '\0';
+    }
+    
+    strcpy(absolute_path, temp);
+}
+
+int fs_open(const char* path) {
+    char abs_path[256];
+    fs_resolve_path(path, abs_path);
+    
+    const char* rel_path;
+    struct fs_driver* driver = fs_get_driver(abs_path, &rel_path);
+    if (!driver) return -1;
+    
+    if (driver->open(rel_path) < 0) return -1;
+    
+    for (int i = 0; i < MAX_OPEN_FILES; i++) {
+        if (!fd_table[i].used) {
+            fd_table[i].used = 1;
+            strcpy(fd_table[i].path, rel_path);
+            fd_table[i].offset = 0;
+            fd_table[i].driver = driver;
             return i;
         }
     }
     return -1;
 }
 
-/* Find entry by name in directory */
-static int find_entry_in_dir(int dir_idx, const char* name) {
-    for (int i = 0; i < FS_MAX_FILES; i++) {
-        if (entries[i].used && entries[i].parent == dir_idx) {
-            if (strcmp(entries[i].name, name) == 0) {
-                return i;
-            }
+int fs_read(int fd, char* buf, size_t size) {
+    if (fd < 0 || fd >= MAX_OPEN_FILES || !fd_table[fd].used) return -1;
+    struct fs_driver* driver = fd_table[fd].driver;
+    if (!driver) return -1;
+    
+    int bytes = driver->read(fd_table[fd].path, buf, size, fd_table[fd].offset);
+    if (bytes > 0) fd_table[fd].offset += bytes;
+    return bytes;
+}
+
+int fs_write(int fd, const char* data, size_t size) {
+    if (fd < 0 || fd >= MAX_OPEN_FILES || !fd_table[fd].used) return -1;
+    struct fs_driver* driver = fd_table[fd].driver;
+    
+    int bytes = driver->write(fd_table[fd].path, data, size, fd_table[fd].offset);
+    if (bytes > 0) fd_table[fd].offset += bytes;
+    return bytes;
+}
+
+int fs_seek(int fd, unsigned int offset) {
+    if (fd < 0 || fd >= MAX_OPEN_FILES || !fd_table[fd].used) return -1;
+    fd_table[fd].offset = offset;
+    return 0;
+}
+
+int fs_close(int fd) {
+    if (fd < 0 || fd >= MAX_OPEN_FILES || !fd_table[fd].used) return -1;
+    if (fd_table[fd].driver && fd_table[fd].driver->close) {
+        fd_table[fd].driver->close(fd_table[fd].offset, fd_table[fd].internal_data, fd_table[fd].mode);
+    }
+    fd_table[fd].used = 0;
+    return 0;
+}
+
+int fs_create_file(const char* path) {
+    char abs_path[256];
+    fs_resolve_path(path, abs_path);
+    const char* rel_path;
+    struct fs_driver* driver = fs_get_driver(abs_path, &rel_path);
+    if (!driver) return -1;
+    return driver->create_file(rel_path);
+}
+
+int fs_create_dir(const char* path) {
+    char abs_path[256];
+    fs_resolve_path(path, abs_path);
+    const char* rel_path;
+    struct fs_driver* driver = fs_get_driver(abs_path, &rel_path);
+    if (!driver) return -1;
+    return driver->create_dir(rel_path);
+}
+
+int fs_delete(const char* path) {
+    char abs_path[256];
+    fs_resolve_path(path, abs_path);
+    const char* rel_path;
+    struct fs_driver* driver = fs_get_driver(abs_path, &rel_path);
+    if (!driver) return -1;
+    return driver->delete_file(rel_path);
+}
+
+int fs_list(const char* path, char* output, unsigned int output_size, int detailed) {
+    char abs_path[256];
+    fs_resolve_path(path, abs_path);
+    
+    output[0] = '\0';
+    
+    const char* rel_path;
+    struct fs_driver* driver = fs_get_driver(abs_path, &rel_path);
+    
+    if (strcmp(abs_path, "/") == 0) {
+        if (detailed) {
+            strcat(output, "2026-01-01 00:00  0  dev/\n");
+        } else {
+            strcat(output, "dev/ ");
         }
+    }
+    
+    if (driver && driver->list_dir) {
+        char drv_out[2048];
+        drv_out[0] = '\0';
+        int res = driver->list_dir(rel_path, drv_out, 2048, detailed);
+        if (res >= 0) {
+            if (strlen(output) + strlen(drv_out) < output_size) {
+                strcat(output, drv_out);
+            }
+            return 0;
+        }
+    }
+    
+    if (output[0] != '\0') return 0;
+    return -1;
+}
+
+int fs_change_dir(const char* path) {
+    char abs_path[256];
+    fs_resolve_path(path, abs_path);
+    const char* rel_path;
+    struct fs_driver* driver = fs_get_driver(abs_path, &rel_path);
+    if (!driver) return -1;
+    
+    if (driver->is_dir(rel_path)) {
+        strcpy(current_path, abs_path);
+        return 0;
     }
     return -1;
 }
 
-/* Parse path and return entry index */
-static int parse_path(const char* path) {
-    if (path == NULL || path[0] == '\0') {
-        return -1;
-    }
-    
-    /* Handle "." as current directory */
-    if (strcmp(path, ".") == 0) {
-        return cwd;
-    }
-    
-    /* Handle ".." as parent directory */
-    if (strcmp(path, "..") == 0) {
-        if (cwd == 0) {
-            return 0;  /* Root has no parent */
-        }
-        return entries[cwd].parent;
-    }
-    
-    /* Start from current directory for relative paths */
-    int current = cwd;
-    
-    if (path[0] == '/') {
-        current = 0;
-        path++;
-    }
-    
-    /* Handle empty path (means current directory) */
-    if (path[0] == '\0') {
-        return current;
-    }
-    
-    /* Parse path components */
-    char component[FS_MAX_NAME_LENGTH];
-    int comp_len = 0;
-    
-    while (*path) {
-        if (*path == '/') {
-            if (comp_len > 0) {
-                component[comp_len] = '\0';
-                int next = find_entry_in_dir(current, component);
-                if (next < 0 || entries[next].type != FS_TYPE_DIRECTORY) {
-                    return -1;
-                }
-                current = next;
-                comp_len = 0;
-            }
-            path++;
-        } else {
-            if (comp_len < FS_MAX_NAME_LENGTH - 1) {
-                component[comp_len++] = *path;
-            }
-            path++;
-        }
-    }
-    
-    /* Handle last component */
-    if (comp_len > 0) {
-        component[comp_len] = '\0';
-        int next = find_entry_in_dir(current, component);
-        if (next < 0) {
-            return -1;
-        }
-        current = next;
-    }
-    
-    return current;
-}
-
-/* Get parent directory index */
-static int get_parent_idx(const char* path) {
-    /* Find last slash */
-    const char* last_slash = NULL;
-    const char* p = path;
-    
-    while (*p) {
-        if (*p == '/') {
-            last_slash = p;
-        }
-        p++;
-    }
-    
-    if (last_slash == NULL) {
-        /* No slash - it's in current directory */
-        return cwd;
-    }
-    
-    if (last_slash == path) {
-        /* Path starts with / - parent is root */
-        return 0;
-    }
-    
-    /* Extract parent path */
-    char parent_path[256];
-    int len = last_slash - path;
-    for (int i = 0; i < len && i < 255; i++) {
-        parent_path[i] = path[i];
-    }
-    parent_path[len] = '\0';
-    
-    return parse_path(parent_path);
-}
-
-/* Get entry name from path */
-static const char* get_name_from_path(const char* path) {
-    const char* last_slash = NULL;
-    const char* p = path;
-    
-    while (*p) {
-        if (*p == '/') {
-            last_slash = p;
-        }
-        p++;
-    }
-    
-    if (last_slash == NULL) {
-        return path;
-    }
-    
-    return last_slash + 1;
-}
-
-/*
- * Initialize filesystem
- */
-void fs_init(void) {
-    /* Clear all entries */
-    for (int i = 0; i < FS_MAX_FILES; i++) {
-        entries[i].used = 0;
-        entries[i].name[0] = '\0';
-    }
-    
-    /* Create root directory */
-    entries[0].used = 1;
-    entries[0].type = FS_TYPE_DIRECTORY;
-    entries[0].name[0] = '/';
-    entries[0].name[1] = '\0';
-    entries[0].parent = 0;
-    entries[0].size = 0;
-    
-    cwd = 0;
-}
-
-/*
- * Create a file or directory
- */
-int fs_create(const char* path, unsigned char type) {
-    if (path == NULL || path[0] == '\0') {
-        return -1;
-    }
-    
-    /* Check if already exists */
-    int existing = parse_path(path);
-    if (existing >= 0) {
-        return -1;  /* Already exists */
-    }
-    
-    /* Find empty entry */
-    int idx = find_empty_entry();
-    if (idx < 0) {
-        return -1;  /* No space */
-    }
-    
-    /* Get parent directory */
-    int parent_idx = get_parent_idx(path);
-    if (parent_idx < 0) {
-        return -1;
-    }
-    
-    /* Get entry name */
-    const char* name = get_name_from_path(path);
-    int name_len = 0;
-    while (name[name_len] && name_len < FS_MAX_NAME_LENGTH - 1) {
-        name_len++;
-    }
-    
-    /* Create entry */
-    entries[idx].used = 1;
-    entries[idx].type = type;
-    entries[idx].parent = parent_idx;
-    entries[idx].size = 0;
-    
-    for (int i = 0; i < name_len && i < FS_MAX_NAME_LENGTH - 1; i++) {
-        entries[idx].name[i] = name[i];
-    }
-    entries[idx].name[name_len] = '\0';
-    
-    return 0;
-}
-
-/*
- * Delete a file or directory
- */
-int fs_delete(const char* path) {
-    int idx = parse_path(path);
-    if (idx < 0) {
-        return -1;
-    }
-    
-    /* Can't delete root */
-    if (idx == 0) {
-        return -1;
-    }
-    
-    /* For directories, check if empty */
-    if (entries[idx].type == FS_TYPE_DIRECTORY) {
-        for (int i = 0; i < FS_MAX_FILES; i++) {
-            if (entries[i].used && entries[i].parent == idx) {
-                return -1;  /* Directory not empty */
-            }
-        }
-    }
-    
-    entries[idx].used = 0;
-    return 0;
-}
-
-/*
- * Read from a file
- */
-int fs_read(const char* path, char* buf, size_t size) {
-    int idx = parse_path(path);
-    if (idx < 0) {
-        return -1;
-    }
-    
-    if (entries[idx].type != FS_TYPE_FILE) {
-        return -1;
-    }
-    
-    unsigned int file_size = entries[idx].size;
-    unsigned int read_size = (size < file_size) ? size : file_size;
-    
-    for (unsigned int i = 0; i < read_size; i++) {
-        buf[i] = entries[idx].data[i];
-    }
-    
-    return read_size;
-}
-
-/*
- * Write to a file
- */
-int fs_write(const char* path, const char* data, size_t size) {
-    int idx = parse_path(path);
-    if (idx < 0) {
-        return -1;
-    }
-    
-    if (entries[idx].type != FS_TYPE_FILE) {
-        return -1;
-    }
-    
-    unsigned int write_size = (size < FS_MAX_FILE_SIZE) ? size : FS_MAX_FILE_SIZE;
-    
-    for (unsigned int i = 0; i < write_size; i++) {
-        entries[idx].data[i] = data[i];
-    }
-    
-    entries[idx].size = write_size;
-    return write_size;
-}
-
-/*
- * List directory contents
- */
-int fs_list(const char* path, char* output, size_t output_size) {
-    int idx = parse_path(path);
-    if (idx < 0) {
-        return -1;
-    }
-    
-    if (entries[idx].type != FS_TYPE_DIRECTORY) {
-        return -1;
-    }
-    
-    output[0] = '\0';
-    size_t pos = 0;
-    
-    for (int i = 0; i < FS_MAX_FILES; i++) {
-        if (entries[i].used && entries[i].parent == idx) {
-            /* Check if we have enough space */
-            int name_len = 0;
-            while (entries[i].name[name_len]) name_len++;
-            
-            if (pos + name_len + 2 < output_size) {
-                /* Copy name */
-                for (int j = 0; j < name_len; j++) {
-                    output[pos++] = entries[i].name[j];
-                }
-                
-                /* Add indicator for directories */
-                if (entries[i].type == FS_TYPE_DIRECTORY) {
-                    output[pos++] = '/';
-                }
-                
-                output[pos++] = ' ';
-            }
-        }
-    }
-    
-    if (pos > 0 && pos < output_size) {
-        output[pos - 1] = '\0';
-    }
-    
-    return 0;
-}
-
-/*
- * Change current directory
- */
-int fs_change_dir(const char* path) {
-    int idx = parse_path(path);
-    if (idx < 0) {
-        return -1;
-    }
-    
-    if (entries[idx].type != FS_TYPE_DIRECTORY) {
-        return -1;
-    }
-    
-    cwd = idx;
-    return 0;
-}
-
-/*
- * Get current working directory
- */
 const char* fs_get_cwd(void) {
-    /* Return path for current directory */
-    static char path[256];
-    
-    if (cwd == 0) {
-        return "/";
-    }
-    
-    /* Build path by traversing up */
-    int idx = cwd;
-    int depth = 0;
-    int stack[FS_MAX_DEPTH];
-    
-    while (idx != 0 && depth < FS_MAX_DEPTH) {
-        stack[depth++] = idx;
-        idx = entries[idx].parent;
-    }
-    
-    path[0] = '\0';
-    
-    /* Build path from root to current */
-    for (int i = depth - 1; i >= 0; i--) {
-        int len = 0;
-        while (entries[stack[i]].name[len]) {
-            len++;
-        }
-        
-        /* Add slash */
-        int pos = 0;
-        while (path[pos]) pos++;
-        path[pos] = '/';
-        path[pos + 1] = '\0';
-        
-        /* Add name */
-        for (int j = 0; j < len && pos + 1 + j < 255; j++) {
-            path[pos + 1 + j] = entries[stack[i]].name[j];
-        }
-        /* Null terminate */
-        path[pos + 1 + len] = '\0';
-    }
-    
-    if (path[0] == '\0') {
-        path[0] = '/';
-        path[1] = '\0';
-    }
-    
-    return path;
+    return current_path;
 }
 
-/*
- * Check if path exists
- */
 int fs_exists(const char* path) {
-    return parse_path(path) >= 0;
-}
-
-/*
- * Get file/directory type
- */
-int fs_get_type(const char* path) {
-    int idx = parse_path(path);
-    if (idx < 0) {
-        return -1;
-    }
-    return entries[idx].type;
+    char abs_path[256];
+    fs_resolve_path(path, abs_path);
+    const char* rel_path;
+    struct fs_driver* driver = fs_get_driver(abs_path, &rel_path);
+    if (!driver) return -1;
+    return (driver->get_size(rel_path) >= 0);
 }

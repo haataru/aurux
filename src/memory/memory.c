@@ -1,144 +1,188 @@
-/*
- * memory.c - Physical memory allocator using bitmap
- */
-
 #include "memory.h"
 #include "../kernel/kernel.h"
 
-#define BITMAP_SIZE (MAX_MEMORY / 4096)  /* One bit per 4KB page */
-#define HEAP_START KERNEL_HEAP_START
-#define HEAP_END (HEAP_START + KERNEL_HEAP_SIZE)
+#define PAGE_SIZE 4096
+#define MAX_BITMAP_SIZE (128 * 1024 * 1024 / PAGE_SIZE / 32) // Maximum of 128MB supported for bitmap size
 
-/* Bitmap for physical memory allocation */
-static unsigned int bitmap[BITMAP_SIZE / 32];
-
-/* Current heap pointer */
-static void* heap_ptr;
-
-/* Total memory statistics */
-static size_t total_memory = 0;
+static unsigned int bitmap[MAX_BITMAP_SIZE];
+static size_t total_memory = 16 * 1024 * 1024; // Default size is 16MB
 static size_t used_memory = 0;
+static size_t bitmap_size = (16 * 1024 * 1024) / PAGE_SIZE;
 
-/*
- * Initialize memory management
- */
-void memory_init(void) {
-    /* Clear bitmap */
-    for (int i = 0; i < BITMAP_SIZE / 32; i++) {
+void memory_init(struct multiboot_info* mbi) {
+    if (mbi && (mbi->flags & 1)) {
+        // mbi->mem_upper is in KB and starts at 1MB
+        total_memory = (mbi->mem_upper * 1024) + (1024 * 1024);
+    }
+    bitmap_size = total_memory / PAGE_SIZE;
+    if (bitmap_size > MAX_BITMAP_SIZE * 32) {
+        bitmap_size = MAX_BITMAP_SIZE * 32;
+        total_memory = bitmap_size * PAGE_SIZE;
+    }
+
+    for (size_t i = 0; i < MAX_BITMAP_SIZE; i++) {
         bitmap[i] = 0;
     }
+
+    // Mark kernel and pre-kernel regions as used
+    unsigned int end_addr = (unsigned int)&kernel_end;
+    end_addr = (end_addr + 0xFFF) & ~0xFFF;
     
-    /* Reserve first pages (null pointer guard, kernel, etc.) */
-    bitmap[0] = 0x00000001;  /* First page reserved */
-    
-    /* Initialize heap pointer */
-    heap_ptr = (void*)HEAP_START;
-    
-    /* Mark kernel pages as used */
-    for (size_t addr = 0x100000; addr < HEAP_START; addr += 4096) {
-        size_t page = addr / 4096;
+    for (unsigned int addr = 0; addr < end_addr; addr += PAGE_SIZE) {
+        unsigned int page = addr / PAGE_SIZE;
         bitmap[page / 32] |= (1 << (page % 32));
+        used_memory += PAGE_SIZE;
     }
-    
-    total_memory = MAX_MEMORY;
-    used_memory = HEAP_START;
 }
 
-/*
- * Allocate a page (4KB)
- */
-static void* alloc_page(void) {
-    for (size_t i = 0; i < BITMAP_SIZE; i++) {
+void* pmm_alloc_page(void) {
+    for (size_t i = 0; i < bitmap_size; i++) {
         size_t word = i / 32;
         size_t bit = i % 32;
         
         if ((bitmap[word] & (1 << bit)) == 0) {
-            /* Found free page */
             bitmap[word] |= (1 << bit);
-            used_memory += 4096;
-            return (void*)(i * 4096);
+            used_memory += PAGE_SIZE;
+            
+            unsigned int* ptr = (unsigned int*)(i * PAGE_SIZE);
+            for(int j = 0; j < 1024; j++) ptr[j] = 0;
+            
+            return (void*)ptr;
         }
     }
-    
-    /* No free pages */
     return NULL;
 }
 
-/*
- * Free a page
- */
-static void free_page(void* ptr) {
-    size_t page = ((size_t)ptr) / 4096;
-    if (page < BITMAP_SIZE) {
-        bitmap[page / 32] &= ~(1 << (page % 32));
-        used_memory -= 4096;
+void pmm_free_page(void* ptr) {
+    unsigned int addr = (unsigned int)ptr;
+    if (addr % PAGE_SIZE != 0) return;
+    
+    unsigned int page = addr / PAGE_SIZE;
+    if (page < bitmap_size) {
+        size_t word = page / 32;
+        size_t bit = page % 32;
+        bitmap[word] &= ~(1 << bit);
+        used_memory -= PAGE_SIZE;
     }
 }
 
-/*
- * Allocate memory from kernel heap
- */
+struct block_header {
+    size_t size;
+    int is_free;
+    struct block_header* next;
+};
+
+static struct block_header* heap_head = NULL;
+
 void* kmalloc(size_t size) {
-    if (size == 0) {
-        return NULL;
-    }
+    if (size == 0) return NULL;
     
-    /* Align to 4 bytes */
     size = (size + 3) & ~3;
     
-    /* Check if we have enough memory */
-    if ((size_t)heap_ptr + size > HEAP_END) {
-        /* Try to allocate from pages */
-        void* ptr = alloc_page();
-        if (ptr == NULL) {
-            return NULL;
+    struct block_header* curr = heap_head;
+    struct block_header* prev = NULL;
+    
+    // First fit search algorithm
+    while (curr) {
+        if (curr->is_free && curr->size >= size) {
+            if (curr->size > size + sizeof(struct block_header) + 16) {
+                struct block_header* next_block = (struct block_header*)((unsigned int)curr + sizeof(struct block_header) + size);
+                next_block->size = curr->size - size - sizeof(struct block_header);
+                next_block->is_free = 1;
+                next_block->next = curr->next;
+                
+                curr->size = size;
+                curr->next = next_block;
+            }
+            curr->is_free = 0;
+            return (void*)((unsigned int)curr + sizeof(struct block_header));
         }
-        return ptr;
+        prev = curr;
+        curr = curr->next;
     }
     
-    void* ret = heap_ptr;
-    heap_ptr = (void*)((size_t)heap_ptr + size);
-    used_memory += size;
+    // No free block found; allocate new page(s)
+    size_t total_size = size + sizeof(struct block_header);
+    size_t pages_needed = (total_size + PAGE_SIZE - 1) / PAGE_SIZE;
     
-    return ret;
+    // Allocate contiguous physical pages; relies on identity mapping
+    // Implements a simple loop to find N contiguous bits in the bitmap
+    
+    unsigned int start_page = 0;
+    unsigned int count = 0;
+    
+    for (size_t i = 0; i < bitmap_size; i++) {
+        size_t word = i / 32;
+        size_t bit = i % 32;
+        if ((bitmap[word] & (1 << bit)) == 0) {
+            if (count == 0) start_page = i;
+            count++;
+            if (count == pages_needed) break;
+        } else {
+            count = 0;
+        }
+    }
+    
+    if (count < pages_needed) return NULL;
+    
+    for (size_t i = start_page; i < start_page + pages_needed; i++) {
+        bitmap[i / 32] |= (1 << (i % 32));
+        used_memory += PAGE_SIZE;
+    }
+    
+    struct block_header* new_block = (struct block_header*)(start_page * PAGE_SIZE);
+    new_block->size = (pages_needed * PAGE_SIZE) - sizeof(struct block_header);
+    new_block->is_free = 0;
+    new_block->next = NULL;
+    
+    if (new_block->size > size + sizeof(struct block_header) + 16) {
+        struct block_header* split = (struct block_header*)((unsigned int)new_block + sizeof(struct block_header) + size);
+        split->size = new_block->size - size - sizeof(struct block_header);
+        split->is_free = 1;
+        split->next = NULL;
+        
+        new_block->size = size;
+        new_block->next = split;
+    }
+    
+    if (prev) {
+        prev->next = new_block;
+    } else {
+        heap_head = new_block;
+    }
+    
+    return (void*)((unsigned int)new_block + sizeof(struct block_header));
 }
 
-/*
- * Free allocated memory
- * Note: Simple allocator doesn't actually free, just updates stats
- */
 void kfree(void* ptr) {
-    if (ptr == NULL) {
-        return;
-    }
+    if (!ptr) return;
     
-    /* Check if ptr is in heap region */
-    if ((size_t)ptr >= HEAP_START && (size_t)ptr < HEAP_END) {
-        /* Memory is in heap - we can't easily free it in a simple allocator */
-        /* In a more sophisticated allocator, we'd track block sizes */
-    } else if ((size_t)ptr >= 0x1000 && (size_t)ptr < MAX_MEMORY) {
-        /* Memory is from page allocation */
-        free_page(ptr);
+    struct block_header* block = (struct block_header*)((unsigned int)ptr - sizeof(struct block_header));
+    block->is_free = 1;
+    
+    // Coalesce adjacent free blocks
+    struct block_header* curr = heap_head;
+    while (curr && curr->next) {
+        if (curr->is_free && curr->next->is_free) {
+            // Check if adjacent free block addresses match for contiguous merging
+            if ((unsigned int)curr + sizeof(struct block_header) + curr->size == (unsigned int)curr->next) {
+                curr->size += sizeof(struct block_header) + curr->next->size;
+                curr->next = curr->next->next;
+                continue; // Re-evaluate with the newly merged next block
+            }
+        }
+        curr = curr->next;
     }
 }
 
-/*
- * Get total available memory
- */
 size_t memory_get_total(void) {
     return total_memory;
 }
 
-/*
- * Get used memory
- */
 size_t memory_get_used(void) {
     return used_memory;
 }
 
-/*
- * Get free memory
- */
 size_t memory_get_free(void) {
     return total_memory - used_memory;
 }

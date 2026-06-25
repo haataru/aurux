@@ -1,0 +1,328 @@
+#include "task.h"
+#include "../drivers/pit/pit.h"
+
+extern volatile unsigned int timer_ticks;
+
+static struct task* current_task = NULL;
+static struct task* ready_queue = NULL;
+static unsigned int next_task_id = 1;
+static struct task* task_to_free = NULL;
+
+void tasking_init(void) {
+    // Initialize the currently executing main thread.
+    struct task* main_task = (struct task*)kmalloc(sizeof(struct task));
+    main_task->id = 0;
+    main_task->esp = 0; // Value assigned during the first context switch interrupt.
+    main_task->kernel_stack = 0; // Ring 0 execution bypasses initial kernel stack requirement.
+    main_task->page_dir = NULL; // Maintain kernel identity map without switching the page directory.
+    main_task->state = TASK_RUNNING;
+    main_task->sleep_ticks = 0;
+    main_task->waiting_for_pid = 0;
+    main_task->waiting_for_io = 0;
+    main_task->next = main_task; // Circular queue implementation for round-robin scheduling.
+    
+    current_task = main_task;
+    ready_queue = main_task;
+}
+
+void create_task(void (*entry_point)(void)) {
+    // Prevent race conditions by disabling interrupts during task creation.
+    asm volatile("cli");
+    
+    struct task* new_task = (struct task*)kmalloc(sizeof(struct task));
+    new_task->id = next_task_id++;
+    new_task->page_dir = NULL;
+    new_task->state = TASK_READY;
+    new_task->sleep_ticks = 0;
+    new_task->waiting_for_pid = 0;
+    new_task->waiting_for_io = 0;
+    
+    unsigned int* stack = (unsigned int*)pmm_alloc_page();
+    
+    unsigned int* stack_top = (unsigned int*)((unsigned int)stack + 4096);
+    
+    // Simulate an interrupt context by pushing processor state and registers onto the stack.
+    
+    *(--stack_top) = 0x202;         // Enable interrupts via EFLAGS IF bit.
+    *(--stack_top) = 0x08;         
+    *(--stack_top) = (unsigned int)entry_point;
+    
+    *(--stack_top) = 0;
+    *(--stack_top) = 0;
+    *(--stack_top) = 0;
+    *(--stack_top) = 0;
+    *(--stack_top) = 0;
+    *(--stack_top) = 0;
+    *(--stack_top) = 0;
+    *(--stack_top) = 0;
+    
+    new_task->esp = (unsigned int)stack_top;
+    new_task->kernel_stack = (unsigned int)stack + 4096;
+    
+    struct task* last = ready_queue;
+    while (last->next != ready_queue) {
+        last = last->next;
+    }
+    last->next = new_task;
+    new_task->next = ready_queue;
+    
+    asm volatile("sti");
+}
+
+void create_user_task(void (*entry_point)(void)) {
+    asm volatile("cli");
+    
+    struct task* new_task = (struct task*)kmalloc(sizeof(struct task));
+    new_task->id = next_task_id++;
+    new_task->page_dir = NULL;
+    new_task->state = TASK_READY;
+    new_task->sleep_ticks = 0;
+    new_task->waiting_for_pid = 0;
+    new_task->waiting_for_io = 0;
+    
+    unsigned int* kstack = (unsigned int*)pmm_alloc_page();
+    unsigned int* ustack = (unsigned int*)pmm_alloc_page();
+    
+    unsigned int* stack_top = (unsigned int*)((unsigned int)kstack + 4096);
+    
+    // User-mode data segment configuration.
+    *(--stack_top) = 0x23;         
+    *(--stack_top) = (unsigned int)ustack + 4096;
+    *(--stack_top) = 0x202;        
+    *(--stack_top) = 0x1B;          // User-mode code segment configuration.
+    *(--stack_top) = (unsigned int)entry_point;
+    
+    *(--stack_top) = 0;
+    *(--stack_top) = 0;
+    *(--stack_top) = 0;
+    *(--stack_top) = 0;
+    *(--stack_top) = 0;
+    *(--stack_top) = 0;
+    *(--stack_top) = 0;
+    *(--stack_top) = 0;
+    
+    new_task->esp = (unsigned int)stack_top;
+    new_task->kernel_stack = (unsigned int)kstack + 4096;
+    
+    struct task* last = ready_queue;
+    while (last->next != ready_queue) {
+        last = last->next;
+    }
+    last->next = new_task;
+    new_task->next = ready_queue;
+    
+    asm volatile("sti");
+}
+
+struct task* create_process(unsigned int* page_dir, unsigned int entry_point, unsigned int ustack_top) {
+    asm volatile("cli");
+    
+    struct task* new_task = (struct task*)kmalloc(sizeof(struct task));
+    new_task->id = next_task_id++;
+    new_task->page_dir = page_dir;
+    new_task->state = TASK_READY;
+    new_task->sleep_ticks = 0;
+    new_task->waiting_for_pid = 0;
+    new_task->waiting_for_io = 0;
+    
+    unsigned int* kstack = (unsigned int*)pmm_alloc_page();
+    unsigned int* stack_top = (unsigned int*)((unsigned int)kstack + 4096);
+    
+    *(--stack_top) = 0x23;         
+    *(--stack_top) = ustack_top;   
+    *(--stack_top) = 0x202;        
+    *(--stack_top) = 0x1B;
+    *(--stack_top) = entry_point;  
+    
+    *(--stack_top) = 0;
+    *(--stack_top) = 0;
+    *(--stack_top) = 0;
+    *(--stack_top) = 0;
+    *(--stack_top) = 0;
+    *(--stack_top) = 0;
+    *(--stack_top) = 0;
+    *(--stack_top) = 0;
+    
+    new_task->esp = (unsigned int)stack_top;
+    new_task->kernel_stack = (unsigned int)kstack + 4096;
+    
+    struct task* last = ready_queue;
+    while (last->next != ready_queue) {
+        last = last->next;
+    }
+    last->next = new_task;
+    new_task->next = ready_queue;
+    
+    asm volatile("sti");
+    return new_task;
+}
+
+unsigned int timer_handler(unsigned int esp) {
+    timer_ticks++;
+    
+    if (task_to_free && task_to_free != current_task) {
+        // Execute task cleanup safely from an independent stack.
+        unsigned int* pd = task_to_free->page_dir;
+        if (pd) {
+            for (int i = 4; i < 1024; i++) {
+                if (pd[i] & PAGE_PRESENT) {
+                    unsigned int* pt = (unsigned int*)(pd[i] & ~0xFFF);
+                    for (int j = 0; j < 1024; j++) {
+                        if (pt[j] & PAGE_PRESENT) {
+                            pmm_free_page((void*)(pt[j] & ~0xFFF));
+                        }
+                    }
+                    pmm_free_page((void*)pt);
+                }
+            }
+            pmm_free_page((void*)pd);
+        }
+        if (task_to_free->kernel_stack) {
+            pmm_free_page((void*)(task_to_free->kernel_stack - 4096));
+        }
+        kfree(task_to_free);
+        task_to_free = NULL;
+    }
+    
+    if (!current_task) {
+        // Acknowledge hardware interrupt early if the scheduler is uninitialized.
+        outb(0x20, 0x20);
+        return esp;
+    }
+    
+    if (current_task->state != TASK_DEAD) {
+        current_task->esp = esp;
+    }
+    
+    struct task* next_task = current_task->next;
+    
+    struct task* iter = current_task->next;
+    do {
+        if (iter->state == TASK_SLEEPING) {
+            if (iter->waiting_for_pid == 0) {
+                if (iter->sleep_ticks > 0) iter->sleep_ticks--;
+                if (iter->sleep_ticks == 0) iter->state = TASK_READY;
+            }
+        }
+        iter = iter->next;
+    } while (iter != current_task->next);
+    
+    while (next_task->state != TASK_READY && next_task->state != TASK_RUNNING) {
+        next_task = next_task->next;
+        // Single runnable task detection ensures loop termination.
+    }
+    
+    // State modification is omitted as kernel threads default to a ready state unless sleeping.
+    
+    current_task = next_task;
+    
+    // Update the TSS stack pointer for privilege level transitions.
+    if (current_task->kernel_stack != 0) {
+        set_kernel_stack(current_task->kernel_stack);
+    }
+    
+    unsigned int current_pd;
+    asm volatile("mov %%cr3, %0" : "=r"(current_pd));
+    
+    unsigned int target_pd = current_task->page_dir ? (unsigned int)current_task->page_dir : (unsigned int)kernel_page_dir;
+    
+    if (current_pd != target_pd) {
+        asm volatile("mov %0, %%cr3" :: "r"(target_pd));
+    }
+    
+    outb(0x20, 0x20);
+    
+    return current_task->esp;
+}
+
+void sleep(unsigned int ms) {
+    // Calculate sleep ticks based on a 100 Hz timer frequency.
+    unsigned int ticks = ms / 10;
+    if (ticks == 0) ticks = 1;
+    
+    asm volatile("cli");
+    current_task->sleep_ticks = ticks;
+    current_task->state = TASK_SLEEPING;
+    asm volatile("sti");
+    
+    yield();
+}
+
+void yield(void) {
+    asm volatile("int $32"); // Trigger a software interrupt to invoke the scheduler.
+}
+
+void destroy_current_process(void) {
+    asm volatile("cli");
+    current_task->state = TASK_DEAD;
+    task_to_free = current_task;
+    
+    // Unblock any tasks currently waiting for this process to terminate.
+    struct task* iter = ready_queue;
+    if (iter) {
+        do {
+            if (iter->state == TASK_SLEEPING && iter->waiting_for_pid == current_task->id) {
+                iter->state = TASK_READY;
+                iter->waiting_for_pid = 0;
+            }
+            iter = iter->next;
+        } while (iter != ready_queue);
+    }
+    
+    struct task* prev = current_task;
+    while (prev->next != current_task) {
+        prev = prev->next;
+    }
+    prev->next = current_task->next;
+    if (ready_queue == current_task) {
+        ready_queue = current_task->next;
+    }
+    
+    asm volatile("mov %0, %%cr3" :: "r"(kernel_page_dir));
+    asm volatile("int $32");
+    while(1);
+}
+
+int wait_for_task(unsigned int pid) {
+    asm volatile("cli");
+    int exists = 0;
+    struct task* iter = ready_queue;
+    if (iter) {
+        do {
+            if (iter->id == pid && iter->state != TASK_DEAD) { exists = 1; break; }
+            iter = iter->next;
+        } while (iter != ready_queue);
+    }
+    if (!exists) {
+        asm volatile("sti");
+        return -1;
+    }
+    
+    current_task->state = TASK_SLEEPING;
+    current_task->waiting_for_pid = pid;
+    asm volatile("sti");
+    yield();
+    return 0;
+}
+
+void sleep_on_io(void* io_obj) {
+    asm volatile("cli");
+    current_task->waiting_for_io = io_obj;
+    current_task->state = TASK_SLEEPING;
+    asm volatile("sti");
+    yield();
+}
+
+void wakeup_tasks_waiting_for_io(void* io_obj) {
+    if (!ready_queue) return;
+    asm volatile("cli");
+    struct task* iter = ready_queue;
+    do {
+        if (iter->state == TASK_SLEEPING && iter->waiting_for_io == io_obj) {
+            iter->state = TASK_READY;
+            iter->waiting_for_io = 0;
+        }
+        iter = iter->next;
+    } while (iter != ready_queue);
+    asm volatile("sti");
+}

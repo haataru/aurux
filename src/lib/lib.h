@@ -18,12 +18,12 @@ int memcmp(const void* s1, const void* s2, size_t n);
 char* strchr(const char* s, int c);
 char* strrchr(const char* s, int c);
 
-/* I/O */
+// I/O
 int printf(const char* format, ...);
 int sprintf(char* buffer, const char* format, ...);
 int kprintf(const char* format, ...);
 
-/* Utils */
+// Utils
 void hex_to_str(unsigned int val, char* buf);
 
 #endif

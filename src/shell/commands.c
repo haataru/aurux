@@ -1,5 +1,10 @@
-/* Shell command implementations */
 #include "shell.h"
+#include "../drivers/vga/vga.h"
+#include "../drivers/rtc/rtc.h"
+#include "../fs/fs.h"
+#include "../memory/memory.h"
+#include "../lib/lib.h"
+#include "../kernel/task.h"
 #include "../drivers/vga/vga.h"
 #include "../drivers/rtc/rtc.h"
 #include "../fs/fs.h"
@@ -8,7 +13,6 @@
 
 #define MAX_ARGS 32
 
-/* Environment variables */
 #define MAX_ENV_VARS 16
 static char env_names[MAX_ENV_VARS][32];
 static char env_values[MAX_ENV_VARS][128];
@@ -54,9 +58,6 @@ static void env_unset(const char* name) {
     }
 }
 
-/*
- * Print help
- */
 static void cmd_help(void) {
     vga_print("Available commands:\n");
     vga_print("  help   - show this help\n");
@@ -79,18 +80,12 @@ static void cmd_help(void) {
     vga_print("  mem    - show memory info\n");
 }
 
-/*
- * Clear screen
- */
 static void cmd_clear(void) {
     vga_clear();
 }
 
-/*
- * Show system info
- */
 static void cmd_fetch(void) {
-    vga_print("turbanOS v0.4\n");
+    vga_print("aurux v1.0\n");
     vga_print("author: haataru (github.com/haataru)\n");
     vga_print("VGA: 80x25 text mode\n");
     vga_print("Memory: ");
@@ -105,9 +100,6 @@ static void cmd_fetch(void) {
     vga_print(" KB free\n");
 }
 
-/*
- * Show time
- */
 static void cmd_time(void) {
     int h, m, s;
     rtc_getTime(&h, &m, &s);
@@ -123,9 +115,6 @@ static void cmd_time(void) {
     vga_print(" MSK\n");
 }
 
-/*
- * Show date
- */
 static void cmd_date(void) {
     int d, mo, y;
     rtc_getDate(&d, &mo, &y);
@@ -141,9 +130,6 @@ static void cmd_date(void) {
     vga_print("\n");
 }
 
-/*
- * Reboot
- */
 static void cmd_reboot(void) {
     vga_print("Rebooting system...\n");
     
@@ -187,12 +173,9 @@ static void cmd_reboot(void) {
     }
 }
 
-/*
- * List directory
- */
 static void cmd_ls(const char* path) {
     char output[512];
-    if (fs_list(path, output, sizeof(output)) < 0) {
+    if (fs_list(path, output, sizeof(output), 0) < 0) {
         vga_print("ls: cannot access '");
         vga_print(path);
         vga_print("': No such file or directory\n");
@@ -200,7 +183,6 @@ static void cmd_ls(const char* path) {
     }
     
     if (output[0] == '\0') {
-        /* Empty directory */
         return;
     }
     
@@ -208,9 +190,6 @@ static void cmd_ls(const char* path) {
     vga_print("\n");
 }
 
-/*
- * Change directory
- */
 static void cmd_cd(const char* path) {
     if (fs_change_dir(path) < 0) {
         vga_print("cd: no such directory: ");
@@ -219,17 +198,20 @@ static void cmd_cd(const char* path) {
     }
 }
 
-/*
- * Show file contents
- */
 static void cmd_cat(const char* path) {
     char buf[FS_MAX_FILE_SIZE + 1];
-    int len = fs_read(path, buf, FS_MAX_FILE_SIZE);
-    
-    if (len < 0) {
+    int fd = fs_open(path);
+    if (fd < 0) {
         vga_print("cat: ");
         vga_print(path);
         vga_print(": No such file\n");
+        return;
+    }
+    
+    int len = fs_read(fd, buf, FS_MAX_FILE_SIZE);
+    fs_close(fd);
+    
+    if (len < 0) {
         return;
     }
     
@@ -240,63 +222,54 @@ static void cmd_cat(const char* path) {
     }
 }
 
-/*
- * Echo or write to file
- */
 static void cmd_echo(const char* text, int append, const char* file) {
     if (file == NULL) {
-        /* Just print text */
         vga_print(text);
         vga_print("\n");
     } else {
-        /* Write to file */
         if (!append) {
-            /* Create new file or overwrite */
             if (fs_exists(file)) {
                 fs_delete(file);
             }
         }
         
-        if (fs_create(file, FS_TYPE_FILE) < 0 && !fs_exists(file)) {
-            vga_print("echo: cannot create file '");
-            vga_print(file);
-            vga_print("'\n");
-            return;
+        if (!fs_exists(file)) {
+            if (fs_create_file(file) < 0) {
+                vga_print("echo: cannot create file '");
+                vga_print(file);
+                vga_print("'\n");
+                return;
+            }
         }
         
-        fs_write(file, text, strlen(text));
+        int fd = fs_open(file);
+        if (fd >= 0) {
+            fs_write(fd, text, strlen(text));
+            fs_close(fd);
+        }
     }
 }
 
-/*
- * Create empty file
- */
 static void cmd_touch(const char* path) {
     if (fs_exists(path)) {
-        return;  /* File already exists */
+        return;  // Skip if file already exists
     }
     
-    if (fs_create(path, FS_TYPE_FILE) < 0) {
+    if (fs_create_file(path) < 0) {
         vga_print("touch: cannot create '");
         vga_print(path);
         vga_print("'\n");
     }
 }
 
-/*
- * Create directory
- */
 static void cmd_mkdir(const char* path) {
-    if (fs_create(path, FS_TYPE_DIRECTORY) < 0) {
+    if (fs_create_dir(path) < 0) {
         vga_print("mkdir: cannot create directory '");
         vga_print(path);
         vga_print("'\n");
     }
 }
 
-/*
- * Remove file or directory
- */
 static void cmd_rm(const char* path) {
     if (fs_delete(path) < 0) {
         vga_print("rm: cannot remove '");
@@ -305,21 +278,14 @@ static void cmd_rm(const char* path) {
     }
 }
 
-/*
- * Print working directory
- */
 static void cmd_pwd(void) {
     const char* cwd = fs_get_cwd();
     vga_print(cwd);
     vga_print("\n");
 }
 
-/*
- * Show/set environment variables
- */
 static void cmd_env(const char* name, const char* value) {
     if (name == NULL) {
-        /* Show all */
         for (int i = 0; i < env_count; i++) {
             vga_print(env_names[i]);
             vga_print("=");
@@ -327,7 +293,6 @@ static void cmd_env(const char* name, const char* value) {
             vga_print("\n");
         }
     } else if (value == NULL) {
-        /* Show one */
         const char* val = env_get(name);
         if (val) {
             vga_print(name);
@@ -336,14 +301,10 @@ static void cmd_env(const char* name, const char* value) {
             vga_print("\n");
         }
     } else {
-        /* Set */
         env_set(name, value);
     }
 }
 
-/*
- * Set environment variable
- */
 static void cmd_set(const char* name, const char* value) {
     if (name == NULL || value == NULL) {
         vga_print("set: usage: set NAME VALUE\n");
@@ -352,9 +313,6 @@ static void cmd_set(const char* name, const char* value) {
     env_set(name, value);
 }
 
-/*
- * Unset environment variable
- */
 static void cmd_unset(const char* name) {
     if (name == NULL) {
         vga_print("unset: usage: unset NAME\n");
@@ -363,9 +321,6 @@ static void cmd_unset(const char* name) {
     env_unset(name);
 }
 
-/*
- * Show memory info
- */
 static void cmd_mem(void) {
     char buf[32];
     
@@ -386,20 +341,15 @@ static void cmd_mem(void) {
     vga_print(" KB\n");
 }
 
-/*
- * Parse command line and execute
- */
 int commands_execute(const char* cmd) {
     if (cmd == NULL || cmd[0] == '\0') {
         return 0;
     }
     
-    /* Copy command to parse */
     char buffer[SHELL_MAX_INPUT];
     strncpy(buffer, cmd, SHELL_MAX_INPUT - 1);
     buffer[SHELL_MAX_INPUT - 1] = '\0';
     
-    /* Parse arguments */
     char* args[MAX_ARGS];
     int argc = 0;
     
@@ -408,18 +358,15 @@ int commands_execute(const char* cmd) {
     char quote_char = 0;
     
     while (*token && argc < MAX_ARGS - 1) {
-        /* Skip whitespace */
         while (*token == ' ' || *token == '\t') token++;
         if (*token == '\0') break;
         
-        /* Check for quotes */
         if (*token == '"' || *token == '\'') {
             quote_char = *token;
             in_quote = 1;
             token++;
         }
         
-        /* Find end of token */
         args[argc] = token;
         while (*token) {
             if (in_quote && *token == quote_char) {
@@ -446,7 +393,6 @@ int commands_execute(const char* cmd) {
         return 0;
     }
     
-    /* Handle redirect */
     char* output_file = NULL;
     int append = 0;
     
@@ -470,7 +416,6 @@ int commands_execute(const char* cmd) {
         }
     }
     
-    /* Execute command */
     const char* cmd_name = args[0];
     
     if (strcmp(cmd_name, "help") == 0) {
@@ -504,7 +449,6 @@ int commands_execute(const char* cmd) {
             vga_print("cat: missing operand\n");
         }
     } else if (strcmp(cmd_name, "echo") == 0) {
-        /* Build text from remaining args */
         char text[256];
         text[0] = '\0';
         

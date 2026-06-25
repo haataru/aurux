@@ -1,17 +1,12 @@
-/*
- * stdio.c - Standard I/O functions
- */
 
 #include "lib.h"
 #include <stdarg.h>
 
-/* VGA output function (defined elsewhere) */
+
 extern void vga_putchar(char c);
 extern void vga_print(const char* str);
 
-/*
- * Simple printf - supports %d, %s, %c, %x, %%
- */
+
 int printf(const char* format, ...) {
     va_list args;
     va_start(args, format);
@@ -148,9 +143,7 @@ int printf(const char* format, ...) {
     return count;
 }
 
-/*
- * sprintf - write formatted string to buffer
- */
+
 int sprintf(char* buffer, const char* format, ...) {
     va_list args;
     va_start(args, format);
@@ -269,9 +262,7 @@ int sprintf(char* buffer, const char* format, ...) {
     return count;
 }
 
-/*
- * kprintf - kernel printf (alias for printf)
- */
+
 int kprintf(const char* format, ...) {
     va_list args;
     va_start(args, format);

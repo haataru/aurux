@@ -1,6 +1,3 @@
-/*
- * vga.c - VGA text mode display driver
- */
 
 #include "vga.h"
 #include "../../kernel/kernel.h"
@@ -8,10 +5,9 @@
 static int cursor_x = 0;
 static int cursor_y = 0;
 static char* vga_buffer = (char*)VGA_MEMORY;
+static unsigned char current_color = 0x07;
 
-/*
- * Initialize VGA display
- */
+
 void vga_init(void) {
     cursor_x = 0;
     cursor_y = 0;
@@ -19,22 +15,18 @@ void vga_init(void) {
     vga_clear();
 }
 
-/*
- * Clear the entire screen
- */
+
 void vga_clear(void) {
     for (int i = 0; i < VGA_WIDTH * VGA_HEIGHT * 2; i += 2) {
         vga_buffer[i] = ' ';
-        vga_buffer[i + 1] = 0x07;
+        vga_buffer[i + 1] = current_color;
     }
     cursor_x = 0;
     cursor_y = 0;
     vga_update_cursor();
 }
 
-/*
- * Update hardware cursor position
- */
+
 void vga_update_cursor(void) {
     unsigned short pos = cursor_y * VGA_WIDTH + cursor_x;
     outb(0x3D4, 0x0F);
@@ -43,9 +35,7 @@ void vga_update_cursor(void) {
     outb(0x3D5, (unsigned char)((pos >> 8) & 0xFF));
 }
 
-/*
- * Set cursor position
- */
+
 void vga_set_cursor(int x, int y) {
     if (x < 0) x = 0;
     if (x >= VGA_WIDTH) x = VGA_WIDTH - 1;
@@ -56,23 +46,17 @@ void vga_set_cursor(int x, int y) {
     vga_update_cursor();
 }
 
-/*
- * Get current cursor X position
- */
+
 int vga_get_cursor_x(void) {
     return cursor_x;
 }
 
-/*
- * Get current cursor Y position
- */
+
 int vga_get_cursor_y(void) {
     return cursor_y;
 }
 
-/*
- * Put a character at current cursor position
- */
+
 void vga_putchar(char c) {
     if (c == '\n') {
         cursor_x = 0;
@@ -82,14 +66,14 @@ void vga_putchar(char c) {
             cursor_x--;
             int pos = (cursor_y * VGA_WIDTH + cursor_x) * 2;
             vga_buffer[pos] = ' ';
-            vga_buffer[pos + 1] = 0x07;
+            vga_buffer[pos + 1] = current_color;
         }
     } else if (c == '\t') {
         cursor_x = (cursor_x + 4) & ~3;
     } else {
         int pos = (cursor_y * VGA_WIDTH + cursor_x) * 2;
         vga_buffer[pos] = c;
-        vga_buffer[pos + 1] = 0x07;
+        vga_buffer[pos + 1] = current_color;
         cursor_x++;
     }
     
@@ -99,7 +83,7 @@ void vga_putchar(char c) {
     }
     
     if (cursor_y >= VGA_HEIGHT) {
-        /* Scroll up */
+        // Scroll up
         for (int y = 0; y < VGA_HEIGHT - 1; y++) {
             for (int x = 0; x < VGA_WIDTH; x++) {
                 int src = ((y + 1) * VGA_WIDTH + x) * 2;
@@ -108,11 +92,11 @@ void vga_putchar(char c) {
                 vga_buffer[dst + 1] = vga_buffer[src + 1];
             }
         }
-        /* Clear last line */
+        // Clear last line
         for (int x = 0; x < VGA_WIDTH; x++) {
             int pos = ((VGA_HEIGHT - 1) * VGA_WIDTH + x) * 2;
             vga_buffer[pos] = ' ';
-            vga_buffer[pos + 1] = 0x07;
+            vga_buffer[pos + 1] = current_color;
         }
         cursor_y = VGA_HEIGHT - 1;
     }
@@ -120,18 +104,48 @@ void vga_putchar(char c) {
     vga_update_cursor();
 }
 
-/*
- * Print a null-terminated string
- */
+
 void vga_print(const char* str) {
     while (*str) {
+        if (*str == '\033' && *(str+1) == '[') {
+            str += 2;
+            int code = 0;
+            while (*str >= '0' && *str <= '9') {
+                code = code * 10 + (*str - '0');
+                str++;
+            }
+            if (*str == 'm') {
+                str++;
+                if (code == 0) current_color = 0x07;
+                else if (code >= 30 && code <= 37) {
+                    unsigned char colors[] = {0, 4, 2, 6, 1, 5, 3, 7};
+                    current_color = (current_color & 0xF0) | colors[code - 30];
+                } else if (code >= 90 && code <= 97) {
+                    unsigned char colors[] = {8, 12, 10, 14, 9, 13, 11, 15};
+                    current_color = (current_color & 0xF0) | colors[code - 90];
+                }
+                continue;
+            } else if (*str == 'J' && code == 2) {
+                str++;
+                vga_clear();
+                continue;
+            } else if (*str == 'H') {
+                str++;
+                vga_set_cursor(0, 0);
+                continue;
+            } else {
+                // If it wasn't a recognized code, print the original escape characters
+                vga_putchar('\033');
+                vga_putchar('[');
+                // Note: code characters are lost here in simple parser, but it's fine for our needs
+                continue;
+            }
+        }
         vga_putchar(*str++);
     }
 }
 
-/*
- * Simple printf implementation for integers and strings
- */
+
 void vga_printf(const char* format, ...) {
     va_list args;
     va_start(args, format);

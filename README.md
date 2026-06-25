@@ -1,51 +1,30 @@
-# TurbanOS
+# AURUX
 
-32-bit x86 kernel.
+32-битное монолитное ядро для архитектуры x86.
 
-## Требования
+## Требования для сборки
 
-```
-gcc-i686-linux-gnu
-binutils-i686-linux-gnu
-qemu-system-x86
-```
+- `i686-linux-gnu-gcc`
+- `i686-linux-gnu-as`
+- `i686-linux-gnu-ld`
+- `mtools`
+- `dosfstools`
+- `qemu-system-i386`
 
-## Сборка
+## Сборка и запуск
 
-```
-make
-```
-
-## Запуск
-
-```
-qemu-system-i386 -kernel kernel.bin
+```bash
+make all
+make run
 ```
 
-## Устройство
-
-Ядро инициализирует VGA, память, файловую систему, клавиатуру, RTC. Запускает shell.
-
-### Файловая система
-
-In-memory, 64 файла/директории, до 4096 байт на файл, вложенность до 4 уровней.
-
-### Драйверы
-
-VGA (текстовый режим 80x25), PS/2 клавиатура, RTC.
-
-### Shell
-
-Команды: help, ls, cd, pwd, cat, touch, mkdir, rm, echo, time, date, clear, reboot, mem.
-
-## Структура
-
+Очистка проекта от артефактов сборки:
+```bash
+make clean
 ```
-src/
-├── kernel/      # ядро, прерывания
-├── drivers/    # vga, keyboard, rtc
-├── memory/     # kmalloc, kfree
-├── fs/         # файловая система
-├── shell/      # командная оболочка
-└── lib/        # string, printf
-```
+
+## Документация
+
+- [Архитектура (docs/kernel.md)](docs/kernel.md)
+- [Карта памяти (docs/memory_map.md)](docs/memory_map.md)
+- [Системные вызовы (docs/syscalls.md)](docs/syscalls.md)
