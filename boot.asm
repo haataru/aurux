@@ -1,69 +1,67 @@
-bits 32
+.section .multiboot
+.align 4
+.long 0x1BADB002
+.long 0x00
+.long -(0x1BADB002 + 0x00)
 
-section .multiboot
-align 4
-    dd 0x1BADB002
-    dd 0x00
-    dd -(0x1BADB002 + 0x00)
+.globl start
+.globl load_idt
+.extern OSmain
+.extern keyboard_handler_main
 
-global start
-global load_idt
-extern OSmain
-extern keyboard_handler_main
+# IDT entry structure
+.set IDT_ENTRY_OFFSET_LOW, 0
+.set IDT_ENTRY_SELECTOR, 2
+.set IDT_ENTRY_ZERO, 4
+.set IDT_ENTRY_FLAGS, 5
+.set IDT_ENTRY_OFFSET_HIGH, 6
+.set IDT_ENTRY_SIZE, 8
 
-struc idt_entry
-    .offset_low:   resw 1
-    .selector:     resw 1
-    .zero:         resb 1
-    .flags:        resb 1
-    .offset_high:  resw 1
-endstruc
-
-section .text
+.section .text
 
 load_idt:
-    mov eax, [esp + 4]
-    lidt [eax]
+    movl 4(%esp), %eax
+    lidt (%eax)
     ret
 
 keyboard_interrupt:
-    pushad
+    pusha
     call keyboard_handler_main
-    popad
-    iretd
+    popa
+    iret
 
 default_interrupt:
-    iretd
+    iret
 
-section .data
-global idt
+.section .data
+.globl idt
 idt:
-    times 256 * 8 db 0
+    .fill 256 * 8, 1, 0
 
 idt_descriptor:
-    dw 256 * 8 - 1
-    dd idt
+    .word 256 * 8 - 1
+    .long idt
 
 start:
     cli
-    mov esp, stack_top
+    movl $stack_top, %esp
     
-    mov eax, keyboard_interrupt
+    movl $keyboard_interrupt, %eax
     
-    mov edi, idt + 33 * 8
+    movl $idt, %edi
+    addl $33 * 8, %edi
     
-    mov word [edi + idt_entry.offset_low], ax
-    mov word [edi + idt_entry.selector], 0x08
-    mov byte [edi + idt_entry.zero], 0
-    mov byte [edi + idt_entry.flags], 0x8E
+    movw %ax, IDT_ENTRY_OFFSET_LOW(%edi)
+    movw $0x08, IDT_ENTRY_SELECTOR(%edi)
+    movb $0, IDT_ENTRY_ZERO(%edi)
+    movb $0x8E, IDT_ENTRY_FLAGS(%edi)
     
-    shr eax, 16
-    mov word [edi + idt_entry.offset_high], ax
+    shrl $16, %eax
+    movw %ax, IDT_ENTRY_OFFSET_HIGH(%edi)
     
-    mov eax, idt_descriptor
-    push eax
+    pushl $idt_descriptor
     call load_idt
-    add esp, 4
+    addl $4, %esp
     
     call remap_pic
     
@@ -71,36 +69,36 @@ start:
     
     call OSmain
     
-    jmp $
+    jmp .
 
 remap_pic:
-    mov al, 0x11
-    out 0x20, al
-    out 0xA0, al
+    movb $0x11, %al
+    outb %al, $0x20
+    outb %al, $0xA0
     
-    mov al, 0x20
-    out 0x21, al
-    mov al, 0x28
-    out 0xA1, al
+    movb $0x20, %al
+    outb %al, $0x21
+    movb $0x28, %al
+    outb %al, $0xA1
     
-    mov al, 0x04
-    out 0x21, al
-    mov al, 0x02
-    out 0xA1, al
+    movb $0x04, %al
+    outb %al, $0x21
+    movb $0x02, %al
+    outb %al, $0xA1
     
-    mov al, 0x01
-    out 0x21, al
-    out 0xA1, al
+    movb $0x01, %al
+    outb %al, $0x21
+    outb %al, $0xA1
     
-    mov al, 0xFD
-    out 0x21, al
-    mov al, 0xFF
-    out 0xA1, al
+    movb $0xFD, %al
+    outb %al, $0x21
+    movb $0xFF, %al
+    outb %al, $0xA1
     
     ret
 
-section .bss
-align 16
+.section .bss
+.align 16
 stack_bottom:
-    resb 16384
+    .skip 16384
 stack_top:
