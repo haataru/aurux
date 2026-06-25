@@ -60,21 +60,15 @@ static int fat_read(const char* path, char* buf, size_t size, unsigned int offse
     int file_size = fat32_get_file_size(path);
     if (file_size < 0) return -1;
     
-    unsigned char* data = (unsigned char*)kmalloc(file_size + 512);
-    if (!data) return -1;
-    
-    if (fat32_read_file(path, data) < 0) {
-        kfree(data);
-        return -1;
-    }
-    
     int to_read = size;
     if (offset >= (unsigned int)file_size) to_read = 0;
     else if (offset + size > (unsigned int)file_size) to_read = file_size - offset;
     
-    for(int i = 0; i < to_read; i++) buf[i] = data[offset + i];
-    kfree(data);
-    return to_read;
+    if (to_read <= 0) return 0;
+    
+    int read = fat32_read_file_ex(path, (unsigned char*)buf, to_read, offset);
+    if (read < 0) return -1;
+    return read;
 }
 static int fat_write(const char* path, const char* data, size_t size, unsigned int offset) {
     int file_size = fat32_get_file_size(path);
@@ -187,14 +181,14 @@ int fs_pipe(int fd_array[2]) {
     current_task->fd_table[l_r] = &global_fd_table[g_r];
     current_task->fd_table[l_w] = &global_fd_table[g_w];
     
-    fd_array[0] = l_r + 3; // +3 to avoid stdin/stdout/stderr
-    fd_array[1] = l_w + 3;
+    fd_array[0] = l_r;
+    fd_array[1] = l_w;
     
     return 0;
 }
 
 // Resolves a path against the current working directory.
-static void fs_resolve_path(const char* input_path, char* absolute_path) {
+void fs_resolve_path(const char* input_path, char* absolute_path) {
     if (input_path[0] == '/') {
         strcpy(absolute_path, input_path);
     } else {
@@ -300,7 +294,8 @@ int fs_read(int fd, char* buf, size_t size) {
     if (!driver) return -1;
     
     int bytes = driver->read(gfd->path, buf, size, gfd->offset);
-    if (bytes > 0) gfd->offset += bytes;
+    extern struct fs_driver pipe_fs_driver;
+    if (bytes > 0 && driver != &pipe_fs_driver) gfd->offset += bytes;
     return bytes;
 }
 
@@ -311,7 +306,8 @@ int fs_write(int fd, const char* data, size_t size) {
     struct fs_driver* driver = gfd->driver;
     
     int bytes = driver->write(gfd->path, data, size, gfd->offset);
-    if (bytes > 0) gfd->offset += bytes;
+    extern struct fs_driver pipe_fs_driver;
+    if (bytes > 0 && driver != &pipe_fs_driver) gfd->offset += bytes;
     return bytes;
 }
 
@@ -338,6 +334,24 @@ int fs_close(int fd) {
         gfd->used = 0;
     }
     return 0;
+}
+
+int fs_dup2(int oldfd, int newfd) {
+    extern struct task* current_task;
+    if (oldfd < 0 || oldfd >= 16 || !current_task->fd_table[oldfd]) return -1;
+    if (newfd < 0 || newfd >= 16) return -1;
+    
+    if (oldfd == newfd) return newfd;
+    
+    if (current_task->fd_table[newfd]) {
+        fs_close(newfd);
+    }
+    
+    global_file_descriptor_t* gfd = (global_file_descriptor_t*)current_task->fd_table[oldfd];
+    gfd->refcount++;
+    current_task->fd_table[newfd] = gfd;
+    
+    return newfd;
 }
 
 int fs_create_file(const char* path) {

@@ -8,32 +8,37 @@
 #include "syscall.h"
 
 int elf_load(const char* filename) {
-    // TODO: Allocate sufficient contiguous physical pages or read headers initially.
     int fd = fs_open(filename);
     if (fd < 0) {
         vga_print("ELF: Failed to open file.\n");
         return -1;
     }
     
-    char* elf_buf = (char*)kmalloc(32768); 
-    
-    int bytes = fs_read(fd, elf_buf, 32768);
-    fs_close(fd);
-    if (bytes <= 0) {
-        vga_print("ELF: Failed to read file.\n");
+    Elf32_Ehdr ehdr;
+    if (fs_read(fd, (char*)&ehdr, sizeof(Elf32_Ehdr)) != sizeof(Elf32_Ehdr)) {
+        vga_print("ELF: Failed to read ELF header.\n");
+        fs_close(fd);
         return -1;
     }
     
-    Elf32_Ehdr* ehdr = (Elf32_Ehdr*)elf_buf;
-    
-    unsigned int magic = *(unsigned int*)ehdr->e_ident;
-    if (magic != ELF_MAGIC) {
-        vga_print("ELF: Invalid magic number.\n");
+    unsigned int magic = *(unsigned int*)ehdr.e_ident;
+    if (magic != ELF_MAGIC || ehdr.e_type != 2) {
+        vga_print("ELF: Invalid magic number or type.\n");
+        fs_close(fd);
         return -1;
     }
     
-    if (ehdr->e_type != 2) {
-        vga_print("ELF: Not an executable.\n");
+    int phdr_size = ehdr.e_phnum * sizeof(Elf32_Phdr);
+    Elf32_Phdr* phdrs = (Elf32_Phdr*)kmalloc(phdr_size);
+    if (!phdrs) {
+        fs_close(fd);
+        return -1;
+    }
+    
+    fs_seek(fd, ehdr.e_phoff);
+    if (fs_read(fd, (char*)phdrs, phdr_size) != phdr_size) {
+        kfree(phdrs);
+        fs_close(fd);
         return -1;
     }
     
@@ -43,34 +48,32 @@ int elf_load(const char* filename) {
     
     unsigned int* new_pd = create_address_space();
     if (!new_pd) {
-        vga_print("ELF: Failed to create address space.\n");
+        kfree(phdrs);
+        fs_close(fd);
         return -1;
     }
     
-    // Map program segments by temporarily switching CR3 to the new address space,
-    // copying data from the accessible identity-mapped buffer, and restoring CR3.
-       
     unsigned int current_pd;
     asm volatile("mov %%cr3, %0" : "=r"(current_pd));
     asm volatile("mov %0, %%cr3" :: "r"(new_pd));
     
-    Elf32_Phdr* phdr = (Elf32_Phdr*)(elf_buf + ehdr->e_phoff);
-    
-    for (int i = 0; i < ehdr->e_phnum; i++) {
-        if (phdr[i].p_type == PT_LOAD) {
-            unsigned int vaddr = phdr[i].p_vaddr;
-            unsigned int memsz = phdr[i].p_memsz;
-            unsigned int filesz = phdr[i].p_filesz;
-            unsigned int offset = phdr[i].p_offset;
+    for (int i = 0; i < ehdr.e_phnum; i++) {
+        if (phdrs[i].p_type == PT_LOAD) {
+            unsigned int vaddr = phdrs[i].p_vaddr;
+            unsigned int memsz = phdrs[i].p_memsz;
+            unsigned int filesz = phdrs[i].p_filesz;
+            unsigned int offset = phdrs[i].p_offset;
             
             for (unsigned int p = 0; p < memsz; p += PAGE_SIZE) {
                 unsigned int phys = (unsigned int)pmm_alloc_page();
                 vmm_map_page_ex(new_pd, vaddr + p, phys, PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
             }
             
-            memcpy((void*)vaddr, elf_buf + offset, filesz);
+            if (filesz > 0) {
+                fs_seek(fd, offset);
+                fs_read(fd, (char*)vaddr, filesz);
+            }
             
-            // Zero-initialize the BSS segment to account for uninitialized memory allocation.
             if (memsz > filesz) {
                 memset((void*)(vaddr + filesz), 0, memsz - filesz);
             }
@@ -81,62 +84,126 @@ int elf_load(const char* filename) {
     unsigned int user_stack_phys = (unsigned int)pmm_alloc_page();
     vmm_map_page_ex(new_pd, user_stack_top - PAGE_SIZE, user_stack_phys, PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
     
+    unsigned int esp = user_stack_top;
+    
+    // Switch to new_pd to write to the stack
+    asm volatile("mov %0, %%cr3" :: "r"(new_pd));
+    
+    // Set up argc and argv for elf_load
+    int argc = 1;
+    char* argv[2];
+    
+    int filename_len = strlen(filename) + 1;
+    esp -= filename_len;
+    strcpy((char*)esp, filename);
+    argv[0] = (char*)esp;
+    argv[1] = NULL;
+    
+    esp &= ~3;
+    
+    esp -= 2 * sizeof(char*);
+    unsigned int argv_ptr = esp;
+    ((char**)esp)[0] = argv[0];
+    ((char**)esp)[1] = argv[1];
+    
+    esp -= 4;
+    *(unsigned int*)esp = argv_ptr;
+    
+    esp -= 4;
+    *(unsigned int*)esp = argc;
+    
+    esp -= 4;
+    *(unsigned int*)esp = 0;
+    
     asm volatile("mov %0, %%cr3" :: "r"(current_pd));
     
-    struct task* t = create_process(new_pd, ehdr->e_entry, user_stack_top - 4);
+    kfree(phdrs);
+    fs_close(fd);
     
-    kfree(elf_buf);
+    struct task* t = create_process(new_pd, ehdr.e_entry, esp);
     return t ? (int)t->id : -1;
 }
 
-int elf_exec(const char* filename, struct registers* regs) {
+int elf_exec(const char* filename, const char* args, struct registers* regs) {
     int fd = fs_open(filename);
     if (fd < 0) {
-        vga_print("EXEC: Failed to open file.\n");
         return -1;
     }
     
-    char* elf_buf = (char*)kmalloc(32768); 
-    int bytes = fs_read(fd, elf_buf, 32768);
-    fs_close(fd);
-    if (bytes <= 0) {
-        kfree(elf_buf);
+    Elf32_Ehdr ehdr;
+    if (fs_read(fd, (char*)&ehdr, sizeof(Elf32_Ehdr)) != sizeof(Elf32_Ehdr)) {
+        vga_print("EXEC: Failed to read ELF header.\n");
+        fs_close(fd);
         return -1;
     }
     
-    Elf32_Ehdr* ehdr = (Elf32_Ehdr*)elf_buf;
-    if (*(unsigned int*)ehdr->e_ident != ELF_MAGIC || ehdr->e_type != 2) {
-        kfree(elf_buf);
+    unsigned int magic = *(unsigned int*)ehdr.e_ident;
+    if (magic != ELF_MAGIC || ehdr.e_type != 2) {
+        vga_print("EXEC: Invalid magic number or type.\n");
+        fs_close(fd);
+        return -1;
+    }
+    
+    int phdr_size = ehdr.e_phnum * sizeof(Elf32_Phdr);
+    Elf32_Phdr* phdrs = (Elf32_Phdr*)kmalloc(phdr_size);
+    if (!phdrs) {
+        fs_close(fd);
+        return -1;
+    }
+    
+    fs_seek(fd, ehdr.e_phoff);
+    if (fs_read(fd, (char*)phdrs, phdr_size) != phdr_size) {
+        kfree(phdrs);
+        fs_close(fd);
         return -1;
     }
     
     unsigned int* new_pd = create_address_space();
     if (!new_pd) {
-        kfree(elf_buf);
+        kfree(phdrs);
+        fs_close(fd);
         return -1;
     }
     
-    unsigned int current_pd;
-    asm volatile("mov %%cr3, %0" : "=r"(current_pd));
+    char temp_args[256];
+    temp_args[0] = '\0';
+    if (args) {
+        strncpy(temp_args, args, 255);
+        temp_args[255] = '\0';
+    }
+    
+    extern struct task* current_task;
+    unsigned int* old_pd = current_task->page_dir;
+    
+    // Switch immediately to new page directory so we can read directly into memory
+    current_task->page_dir = new_pd;
     asm volatile("mov %0, %%cr3" :: "r"(new_pd));
     
-    Elf32_Phdr* phdr = (Elf32_Phdr*)(elf_buf + ehdr->e_phoff);
-    for (int i = 0; i < ehdr->e_phnum; i++) {
-        if (phdr[i].p_type == PT_LOAD) {
-            unsigned int vaddr = phdr[i].p_vaddr;
-            unsigned int memsz = phdr[i].p_memsz;
-            unsigned int filesz = phdr[i].p_filesz;
-            unsigned int offset = phdr[i].p_offset;
+    for (int i = 0; i < ehdr.e_phnum; i++) {
+        if (phdrs[i].p_type == PT_LOAD) {
+            unsigned int vaddr = phdrs[i].p_vaddr;
+            unsigned int memsz = phdrs[i].p_memsz;
+            unsigned int filesz = phdrs[i].p_filesz;
+            unsigned int offset = phdrs[i].p_offset;
             
             for (unsigned int p = 0; p < memsz; p += PAGE_SIZE) {
                 unsigned int phys = (unsigned int)pmm_alloc_page();
                 vmm_map_page_ex(new_pd, vaddr + p, phys, PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
             }
             
-            memcpy((void*)vaddr, elf_buf + offset, filesz);
+            if (filesz > 0) {
+                fs_seek(fd, offset);
+                fs_read(fd, (char*)vaddr, filesz);
+            }
             
             if (memsz > filesz) {
                 memset((void*)(vaddr + filesz), 0, memsz - filesz);
+            }
+            
+            unsigned int segment_end = vaddr + memsz;
+            if (segment_end > current_task->heap_start) {
+                current_task->heap_start = (segment_end + 0xFFF) & ~0xFFF;
+                current_task->heap_end = current_task->heap_start;
             }
         }
     }
@@ -145,15 +212,67 @@ int elf_exec(const char* filename, struct registers* regs) {
     unsigned int user_stack_phys = (unsigned int)pmm_alloc_page();
     vmm_map_page_ex(new_pd, user_stack_top - PAGE_SIZE, user_stack_phys, PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
     
-    asm volatile("mov %0, %%cr3" :: "r"(current_pd));
+    unsigned int esp = user_stack_top;
     
-    extern struct task* current_task;
-    unsigned int* old_pd = current_task->page_dir;
+    // Parse arguments from temp_args (which contains the full command string)
+    int argc = 0;
+    char* argv[32];
     
-    current_task->page_dir = new_pd;
-    asm volatile("mov %0, %%cr3" :: "r"(new_pd));
+    if (temp_args[0] != '\0') {
+        char* token = temp_args;
+        while (*token) {
+            while (*token == ' ') token++;
+            if (!*token) break;
+            
+            char* start = token;
+            while (*token && *token != ' ') token++;
+            
+            if (*token == ' ') {
+                *token = '\0';
+                token++;
+            }
+            
+            int len = strlen(start) + 1;
+            esp -= len;
+            strcpy((char*)esp, start);
+            argv[argc++] = (char*)esp;
+            if (argc >= 31) break;
+        }
+    }
     
-    for (int i = 4; i < 1024; i++) {
+    // Fallback if no args provided at all
+    if (argc == 0) {
+        int filename_len = strlen(filename) + 1;
+        esp -= filename_len;
+        strcpy((char*)esp, filename);
+        argv[argc++] = (char*)esp;
+    }
+    argv[argc] = NULL;
+    
+    // Align stack
+    esp &= ~3;
+    
+    // Push argv array
+    esp -= (argc + 1) * sizeof(char*);
+    unsigned int argv_ptr = esp;
+    for (int i = 0; i <= argc; i++) {
+        ((char**)esp)[i] = argv[i];
+    }
+    
+    // Push argv
+    esp -= 4;
+    *(unsigned int*)esp = argv_ptr;
+    
+    // Push argc
+    esp -= 4;
+    *(unsigned int*)esp = argc;
+    
+    // Push dummy return address
+    esp -= 4;
+    *(unsigned int*)esp = 0;
+    
+    // Clean up old address space
+    for (int i = 256; i < 1024; i++) {
         if (old_pd[i] & PAGE_PRESENT) {
             unsigned int* pt = (unsigned int*)(old_pd[i] & ~0xFFF);
             for (int j = 0; j < 1024; j++) {
@@ -166,10 +285,11 @@ int elf_exec(const char* filename, struct registers* regs) {
     }
     pmm_free_page((void*)old_pd);
     
-    kfree(elf_buf);
+    kfree(phdrs);
+    fs_close(fd);
     
-    regs->eip = ehdr->e_entry;
-    regs->useresp = user_stack_top - 4;
+    regs->eip = ehdr.e_entry;
+    regs->useresp = esp;
     regs->eax = 0;
     
     return 0;

@@ -237,6 +237,16 @@ static void format_83_name(const char* input, char* output) {
         output[i] = ' ';
     }
     
+    if (input[0] == '.' && input[1] == '\0') {
+        output[0] = '.';
+        return;
+    }
+    if (input[0] == '.' && input[1] == '.' && input[2] == '\0') {
+        output[0] = '.';
+        output[1] = '.';
+        return;
+    }
+    
     int i = 0;
     int j = 0;
 
@@ -366,7 +376,7 @@ int fat32_is_dir(const char* path) {
     return 0;
 }
 
-int fat32_read_file(const char* filename, unsigned char* buffer) {
+int fat32_read_file_ex(const char* filename, unsigned char* buffer, size_t size, unsigned int offset) {
     char target_name[256];
     unsigned int cluster = fat32_find_dir_cluster(filename, NULL, target_name);
     if (cluster == 0xFFFFFFFF) return -1;
@@ -376,26 +386,43 @@ int fat32_read_file(const char* filename, unsigned char* buffer) {
         if (entry.attributes & FAT_ATTR_DIRECTORY) return -1;
         
         unsigned int file_cluster = ((unsigned int)entry.cluster_high << 16) | entry.cluster_low;
-        unsigned int size = entry.size;
+        unsigned int file_size = entry.size;
+        
+        if (offset >= file_size) return 0;
+        unsigned int to_read = size;
+        if (offset + size > file_size) to_read = file_size - offset;
         
         unsigned int bytes_read = 0;
+        unsigned int current_pos = 0;
         unsigned char sector[512];
         
-        while (file_cluster < 0x0FFFFFF8 && bytes_read < size) {
+        while (file_cluster < 0x0FFFFFF8 && bytes_read < to_read) {
             unsigned int first_sector_of_cluster = data_start + (file_cluster - 2) * bpb.sectors_per_cluster;
-            for (int i = 0; i < bpb.sectors_per_cluster && bytes_read < size; i++) {
+            for (int i = 0; i < bpb.sectors_per_cluster && bytes_read < to_read; i++) {
+                if (current_pos + 512 <= offset) {
+                    current_pos += 512;
+                    continue; // Skip this sector entirely
+                }
+                
                 ata_read_sector(first_sector_of_cluster + i, sector);
-                unsigned int to_copy = size - bytes_read;
-                if (to_copy > 512) to_copy = 512;
-                for (unsigned int k = 0; k < to_copy; k++) {
-                    buffer[bytes_read++] = sector[k];
+                
+                for (int k = 0; k < 512 && bytes_read < to_read; k++, current_pos++) {
+                    if (current_pos >= offset) {
+                        buffer[bytes_read++] = sector[k];
+                    }
                 }
             }
             file_cluster = fat32_get_next_cluster(file_cluster);
         }
-        return size;
+        return bytes_read;
     }
     return -1;
+}
+
+int fat32_read_file(const char* filename, unsigned char* buffer) {
+    int size = fat32_get_file_size(filename);
+    if (size < 0) return -1;
+    return fat32_read_file_ex(filename, buffer, size, 0);
 }
 
 int fat32_get_file_size(const char* filename) {
@@ -784,12 +811,16 @@ int fat32_list_dir(const char* path, char* output, unsigned int output_size, int
                     n = strlen(name);
                 } else {
                     for (int k = 0; k < 8 && dir[j].name[k] != ' '; k++) {
-                        name[n++] = dir[j].name[k];
+                        char c = dir[j].name[k];
+                        if (c >= 'A' && c <= 'Z') c += 32;
+                        name[n++] = c;
                     }
                     if (dir[j].name[8] != ' ') {
                         name[n++] = '.';
                         for (int k = 8; k < 11 && dir[j].name[k] != ' '; k++) {
-                            name[n++] = dir[j].name[k];
+                            char c = dir[j].name[k];
+                            if (c >= 'A' && c <= 'Z') c += 32;
+                            name[n++] = c;
                         }
                     }
                     name[n] = '\0';

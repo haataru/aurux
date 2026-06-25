@@ -3,7 +3,6 @@
 
 #include "../kernel/kernel.h"
 
-
 #define FS_TYPE_FILE 1
 #define FS_TYPE_DIRECTORY 2
 
@@ -45,19 +44,19 @@ struct fs_driver* fs_get_driver(const char* path, const char** out_relative_path
 
 void fs_init(void);
 
-
 int fs_open(const char* path);
 int fs_read(int fd, char* buf, size_t size);
 int fs_write(int fd, const char* data, size_t size);
 int fs_seek(int fd, unsigned int offset);
 int fs_close(int fd);
 int fs_pipe(int fd[2]);
-
+int fs_dup2(int oldfd, int newfd);
 
 int fs_create_file(const char* path);
 int fs_create_dir(const char* path);
 int fs_delete(const char* path);
 int fs_list(const char* path, char* output, unsigned int output_size, int detailed);
+void fs_resolve_path(const char* input_path, char* abs_path);
 int fs_change_dir(const char* path);
 const char* fs_get_cwd(void);
 int fs_exists(const char* path);

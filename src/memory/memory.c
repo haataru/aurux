@@ -1,4 +1,5 @@
 #include "memory.h"
+#include "paging.h"
 #include "../kernel/kernel.h"
 
 #define PAGE_SIZE 4096
@@ -128,8 +129,12 @@ void* kmalloc(size_t size) {
     for (size_t i = start_page; i < start_page + pages_needed; i++) {
         bitmap[i / 32] |= (1 << (i % 32));
         used_memory += PAGE_SIZE;
+        unsigned int phys = i * PAGE_SIZE;
+        // Ensure it's mapped in the kernel page directory if it's beyond 16MB
+        if (phys >= 0x01000000) {
+            vmm_map_page(phys, phys, PAGE_PRESENT | PAGE_WRITE);
+        }
     }
-    
     struct block_header* new_block = (struct block_header*)(start_page * PAGE_SIZE);
     new_block->size = (pages_needed * PAGE_SIZE) - sizeof(struct block_header);
     new_block->is_free = 0;

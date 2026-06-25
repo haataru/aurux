@@ -9,20 +9,33 @@ static int devfs_open(const char* path) {
 }
 
 static int devfs_read(const char* path, char* buf, size_t size, unsigned int offset) {
-    (void)path;
-    (void)buf;
-    (void)size;
     (void)offset;
-    // Reading from devfs is not implemented yet.
-    return 0;
+    if (strcmp(path, "tty0") == 0) {
+        extern char keyboard_getchar(void);
+        for (size_t i = 0; i < size; i++) {
+            char c = keyboard_getchar();
+            buf[i] = c;
+            if (c == '\n') return i + 1;
+        }
+        return size;
+    }
+    if (strcmp(path, "null") == 0) {
+        return 0; // EOF
+    }
+    return -1;
 }
 
 static int devfs_write(const char* path, const char* data, size_t size, unsigned int offset) {
     (void)offset;
     if (strcmp(path, "tty0") == 0) {
-        for (size_t i = 0; i < size; i++) {
-            char c[2] = {data[i], 0};
-            vga_print(c);
+        extern void* kmalloc(unsigned int size);
+        extern void kfree(void* ptr);
+        char* temp = (char*)kmalloc(size + 1);
+        if (temp) {
+            for (size_t i = 0; i < size; i++) temp[i] = data[i];
+            temp[size] = '\0';
+            vga_print(temp);
+            kfree(temp);
         }
         return size;
     }

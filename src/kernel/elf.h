@@ -43,6 +43,6 @@ typedef struct {
 
 struct registers;
 int elf_load(const char* filename);
-int elf_exec(const char* filename, struct registers* regs);
+int elf_exec(const char* filename, const char* args, struct registers* regs);
 
 #endif

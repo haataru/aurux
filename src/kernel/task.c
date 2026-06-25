@@ -1,5 +1,6 @@
 #include "task.h"
 #include "../drivers/pit/pit.h"
+#include "../fs/fs.h"
 
 extern volatile unsigned int timer_ticks;
 
@@ -25,6 +26,12 @@ void tasking_init(void) {
     
     current_task = main_task;
     ready_queue = main_task;
+    
+    // Initialize standard file descriptors (0, 1, 2)
+    extern int fs_open(const char* path);
+    fs_open("/dev/tty0"); // 0: stdin
+    fs_open("/dev/tty0"); // 1: stdout
+    fs_open("/dev/tty0"); // 2: stderr
 }
 
 void create_task(void (*entry_point)(void)) {
@@ -131,7 +138,17 @@ struct task* create_process(unsigned int* page_dir, unsigned int entry_point, un
     new_task->waiting_for_pid = 0;
     new_task->waiting_for_io = 0;
     new_task->pending_signals = 0;
-    for (int i = 0; i < 16; i++) new_task->fd_table[i] = 0;
+    extern struct task* current_task;
+    if (current_task) {
+        for (int i = 0; i < 16; i++) {
+            new_task->fd_table[i] = current_task->fd_table[i];
+            if (new_task->fd_table[i]) {
+                ((global_file_descriptor_t*)new_task->fd_table[i])->refcount++;
+            }
+        }
+    } else {
+        for (int i = 0; i < 16; i++) new_task->fd_table[i] = 0;
+    }
     
     unsigned int* kstack = (unsigned int*)pmm_alloc_page();
     unsigned int* stack_top = (unsigned int*)((unsigned int)kstack + 4096);
@@ -172,7 +189,7 @@ unsigned int timer_handler(unsigned int esp) {
         // Execute task cleanup safely from an independent stack.
         unsigned int* pd = task_to_free->page_dir;
         if (pd) {
-            for (int i = 4; i < 1024; i++) {
+            for (int i = 32; i < 1024; i++) {
                 if (pd[i] & PAGE_PRESENT) {
                     unsigned int* pt = (unsigned int*)(pd[i] & ~0xFFF);
                     for (int j = 0; j < 1024; j++) {
@@ -277,6 +294,13 @@ void destroy_current_process(void) {
     current_task->state = TASK_DEAD;
     task_to_free = current_task;
     
+    extern int fs_close(int fd);
+    for (int i = 0; i < 16; i++) {
+        if (current_task->fd_table[i]) {
+            fs_close(i);
+        }
+    }
+    
     // Unblock any tasks currently waiting for this process to terminate.
     struct task* iter = ready_queue;
     if (iter) {
@@ -347,7 +371,7 @@ void wakeup_tasks_waiting_for_io(void* io_obj) {
     asm volatile("sti");
 }
 
-int task_fork(void) {
+int task_fork(unsigned int esp) {
     asm volatile("cli");
     struct task* parent = current_task;
     
@@ -366,6 +390,8 @@ int task_fork(void) {
     child->waiting_for_pid = 0;
     child->waiting_for_io = 0;
     child->pending_signals = 0;
+    child->heap_start = parent->heap_start;
+    child->heap_end = parent->heap_end;
     
     for (int i = 0; i < 16; i++) {
         child->fd_table[i] = parent->fd_table[i];
@@ -381,10 +407,30 @@ int task_fork(void) {
     asm volatile("invlpg (%0)" :: "r"(scratch_vaddr) : "memory");
     
     unsigned int parent_kstack_start = (parent->kernel_stack - 4096);
+    
+    if (parent_kstack_start >= (128 * 1024 * 1024)) {
+        extern void vga_print(const char*);
+        vga_print("task_fork: parent_kstack_start is invalid or corrupted!\n");
+        kfree(child);
+        pmm_free_page((void*)new_kstack_phys);
+        for (int i = 32; i < 1024; i++) {
+            if (new_pd[i] & PAGE_PRESENT) {
+                unsigned int* pt = (unsigned int*)(new_pd[i] & ~0xFFF);
+                for (int j = 0; j < 1024; j++) {
+                    if (pt[j] & PAGE_PRESENT) pmm_free_page((void*)(pt[j] & ~0xFFF));
+                }
+                pmm_free_page((void*)pt);
+            }
+        }
+        pmm_free_page((void*)new_pd);
+        asm volatile("sti");
+        return -1;
+    }
+    
     extern void* memcpy(void* dest, const void* src, size_t n);
     memcpy((void*)scratch_vaddr, (void*)parent_kstack_start, 4096);
     
-    unsigned int esp_offset = parent->esp - parent_kstack_start;
+    unsigned int esp_offset = esp - parent_kstack_start;
     child->kernel_stack = new_kstack_phys + 4096;
     child->esp = new_kstack_phys + esp_offset;
     

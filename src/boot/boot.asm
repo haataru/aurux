@@ -77,12 +77,14 @@ keyboard_interrupt:
 
 page_fault_interrupt:
     pusha
-    movl %cr2, %eax
-    pushl %eax
     movl 36(%esp), %eax
     pushl %eax
+    movl %cr2, %eax
+    pushl %eax
+    movl 40(%esp), %eax
+    pushl %eax
     call page_fault_handler
-    addl $8, %esp
+    addl $12, %esp
     popa
     addl $4, %esp
     iret

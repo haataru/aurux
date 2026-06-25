@@ -1,6 +1,7 @@
 #include "paging.h"
 #include "memory.h"
 #include "../drivers/vga/vga.h"
+#include "../lib/lib.h"
 
 unsigned int* kernel_page_dir = NULL;
 
@@ -16,9 +17,9 @@ void paging_init(void) {
         kernel_page_dir[i] = 0x02; 
     }
     
-    // Identity map the first 16MB of memory to preserve kernel execution
-    // 16MB equals 4096 pages
-    for (unsigned int i = 0; i < 4096 * PAGE_SIZE; i += PAGE_SIZE) {
+    // Identity map the first 128MB of memory to preserve kernel execution
+    // 128MB equals 32768 pages
+    for (unsigned int i = 0; i < 32768 * PAGE_SIZE; i += PAGE_SIZE) {
         vmm_map_page(i, i, PAGE_PRESENT | PAGE_WRITE);
     }
     
@@ -62,9 +63,8 @@ unsigned int* create_address_space(void) {
         new_pd[i] = 0x02; // Not present, R/W, supervisor
     }
     
-    // Copy kernel mappings; 16MB is 4 page tables where each covers 4MB
-    // Copy the first 4 Page Directory Entries
-    for (int i = 0; i < 4; i++) {
+    // Copy kernel PDEs (first 128MB = 32 PDEs)
+    for (int i = 0; i < 32; i++) {
         new_pd[i] = kernel_page_dir[i];
     }
     
@@ -81,12 +81,12 @@ unsigned int* clone_address_space(unsigned int* current_pd) {
     }
     
     // Copy kernel PDEs
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 32; i++) {
         new_pd[i] = current_pd[i];
     }
     
     // Copy user PDEs
-    for (int i = 4; i < 1024; i++) {
+    for (int i = 32; i < 1024; i++) {
         if (current_pd[i] & PAGE_PRESENT) {
             unsigned int* parent_pt = (unsigned int*)(current_pd[i] & ~0xFFF);
             unsigned int* new_pt = (unsigned int*)pmm_alloc_page();
@@ -122,10 +122,60 @@ void vmm_unmap_page(unsigned int virt_addr) {
     }
 }
 
-void page_fault_handler(unsigned int error_code, unsigned int faulting_address) {
+static void serial_print(const char* str) {
+    while (*str) {
+        while ((inb(0x3F8 + 5) & 0x20) == 0);
+        outb(0x3F8, *str++);
+    }
+}
+
+void page_fault_handler(unsigned int error_code, unsigned int faulting_address, unsigned int eip) {
     vga_print("\nPAGE FAULT! Address: 0x");
-    // TODO: Implement hex printing using string library
-    // Currently assumes a simple halt
+    serial_print("\nPAGE FAULT! Address: 0x");
+    
+    char hex[9];
+    hex[8] = 0;
+    unsigned int temp = faulting_address;
+    for(int i=7; i>=0; i--) {
+        int nibble = temp & 0xF;
+        hex[i] = nibble < 10 ? '0' + nibble : 'A' + nibble - 10;
+        temp >>= 4;
+    }
+    vga_print(hex);
+    serial_print(hex);
+    
+    vga_print(" Error Code: 0x");
+    serial_print(" Error Code: 0x");
+    temp = error_code;
+    for(int i=7; i>=0; i--) {
+        int nibble = temp & 0xF;
+        hex[i] = nibble < 10 ? '0' + nibble : 'A' + nibble - 10;
+        temp >>= 4;
+    }
+    vga_print(hex);
+    serial_print(hex);
+    
+    vga_print(" EIP: 0x");
+    serial_print(" EIP: 0x");
+    temp = eip;
+    for(int i=7; i>=0; i--) {
+        int nibble = temp & 0xF;
+        hex[i] = nibble < 10 ? '0' + nibble : 'A' + nibble - 10;
+        temp >>= 4;
+    }
+    vga_print(hex);
+    serial_print(hex);
+    serial_print(" Halt.\n");
+    
+    vga_print(" EIP: 0x");
+    temp = eip;
+    for(int i=7; i>=0; i--) {
+        int nibble = temp & 0xF;
+        hex[i] = nibble < 10 ? '0' + nibble : 'A' + nibble - 10;
+        temp >>= 4;
+    }
+    vga_print(hex);
+    
     vga_print(" Halt.\n");
     while(1) {
         asm volatile("hlt");

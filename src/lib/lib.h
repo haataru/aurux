@@ -2,6 +2,8 @@
 #define LIB_H
 
 #include "../kernel/stddef.h"
+#include "syscalls.h"
+#include "malloc.h"
 
 int strcmp(const char* s1, const char* s2);
 int strncmp(const char* s1, const char* s2, size_t n);

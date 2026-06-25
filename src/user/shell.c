@@ -1,123 +1,102 @@
 #include "../lib/lib.h"
 
-// User-space system call wrapper functions
-static void print(const char* str) {
-    asm volatile(
-        "int $0x80"
-        :: "a"(1), "b"(str) : "memory"
-    );
-}
+// Syscalls are now included via lib.h -> syscalls.h
 
-static void exit(int status) {
-    asm volatile(
-        "int $0x80"
-        :: "a"(2), "b"(status) : "memory"
-    );
-}
+static int shell_exec(char* cmd, char* arg, int in_fd, int out_fd) {
+    char* redirect_out = 0;
+    char* redirect_in = 0;
+    
+    // Process < and > (lazy simple parsing)
+    for (int i = 0; arg[i]; i++) {
+        if (arg[i] == '>') {
+            arg[i] = '\0';
+            redirect_out = arg + i + 1;
+            while (*redirect_out == ' ') redirect_out++;
+        } else if (arg[i] == '<') {
+            arg[i] = '\0';
+            redirect_in = arg + i + 1;
+            while (*redirect_in == ' ') redirect_in++;
+        }
+    }
+    
+    // Clean trailing spaces in arg
+    int len = strlen(arg);
+    while (len > 0 && arg[len-1] == ' ') {
+        arg[len-1] = '\0';
+        len--;
+    }
 
-static int read(int fd, char* buf, int count) {
-    int ret;
-    asm volatile(
-        "int $0x80"
-        : "=a"(ret) : "a"(3), "b"(fd), "c"(buf), "d"(count) : "memory"
-    );
-    return ret;
-}
-
-static int fork(void) {
-    int pid;
-    asm volatile(
-        "int $0x80"
-        : "=a"(pid) : "a"(18) : "memory"
-    );
-    return pid;
-}
-
-static int exec(const char* path) {
-    int ret;
-    asm volatile(
-        "int $0x80"
-        : "=a"(ret) : "a"(19), "b"(path) : "memory"
-    );
-    return ret;
-}
-
-static int spawn(const char* path) {
     int pid = fork();
     if (pid == 0) {
-        exec(path);
-        exit(1);
+        if (in_fd != 0) {
+            dup2(in_fd, 0);
+            close(in_fd);
+        }
+        if (out_fd != 1) {
+            dup2(out_fd, 1);
+            close(out_fd);
+        }
+        if (redirect_in && *redirect_in) {
+            int fd = open(redirect_in);
+            if (fd >= 0) {
+                dup2(fd, 0);
+                close(fd);
+            } else {
+                print("shell: input file not found\n");
+                exit(1);
+            }
+        }
+        if (redirect_out && *redirect_out) {
+            create_file(redirect_out);
+            int fd = open(redirect_out);
+            if (fd >= 0) {
+                dup2(fd, 1);
+                close(fd);
+            } else {
+                print("shell: output file error\n");
+                exit(1);
+            }
+        }
+        
+        char path_buf[128];
+        char* exec_path = cmd;
+        
+        // Simple PATH resolution
+        if (cmd[0] != '/' && cmd[0] != '.') {
+            strcpy(path_buf, "/bin/");
+            strcat(path_buf, cmd);
+            
+            // Auto append .elf
+            int len = strlen(path_buf);
+            if (len < 4 || strcmp(path_buf + len - 4, ".elf") != 0 && strcmp(path_buf + len - 4, ".ELF") != 0) {
+                strcat(path_buf, ".elf");
+            }
+            exec_path = path_buf;
+        }
+        
+        // Re-construct the full arguments string for our exec format
+        char full_args[256];
+        strcpy(full_args, cmd);
+        if (arg[0] != '\0') {
+            strcat(full_args, " ");
+            strcat(full_args, arg);
+        }
+        
+        if (exec(exec_path, full_args) < 0) {
+            // Try without .elf if it failed and we added it
+            if (exec(cmd, full_args) < 0) {
+                print("\033[91m");
+                print(cmd);
+                print(": command not found\033[0m\n");
+                exit(1);
+            }
+        }
     }
     return pid;
 }
 
-static int wait(int pid) {
-    int ret;
-    asm volatile("int $0x80" : "=a"(ret) : "a"(5), "b"(pid) : "memory");
-    return ret;
-}
-
-static int open(const char* path) {
-    int fd;
-    asm volatile("int $0x80" : "=a"(fd) : "a"(6), "b"(path) : "memory");
-    return fd;
-}
-
-static int create_file(const char* path) {
-    int ret;
-    asm volatile("int $0x80" : "=a"(ret) : "a"(15), "b"(path) : "memory");
-    return ret;
-}
-
-static int write(int fd, const char* data, int size) {
-    int ret;
-    asm volatile("int $0x80" : "=a"(ret) : "a"(7), "b"(fd), "c"(data), "d"(size) : "memory");
-    return ret;
-}
-
-static int close(int fd) {
-    int ret;
-    asm volatile("int $0x80" : "=a"(ret) : "a"(8), "b"(fd) : "memory");
-    return ret;
-}
-
-static int mkdir(const char* path) {
-    int ret;
-    asm volatile("int $0x80" : "=a"(ret) : "a"(10), "b"(path) : "memory");
-    return ret;
-}
-
-static int listdir(const char* path, char* buf, int size, int detailed) {
-    int ret;
-    asm volatile("int $0x80" : "=a"(ret) : "a"(11), "b"(path), "c"(buf), "d"(size), "S"(detailed) : "memory");
-    return ret;
-}
-
-static int unlink(const char* path) {
-    int ret;
-    asm volatile("int $0x80" : "=a"(ret) : "a"(12), "b"(path) : "memory");
-    return ret;
-}
-
-static int chdir(const char* path) {
-    int ret;
-    asm volatile("int $0x80" : "=a"(ret) : "a"(13), "b"(path) : "memory");
-    return ret;
-}
-
-static int getcwd(char* buf, int size) {
-    int ret;
-    asm volatile("int $0x80" : "=a"(ret) : "a"(14), "b"(buf), "c"(size) : "memory");
-    return ret;
-}
-
-static int gettime(int* time_arr) {
-    int ret;
-    asm volatile("int $0x80" : "=a"(ret) : "a"(16), "b"(time_arr) : "memory");
-    return ret;
-}
-
-void _start() {
+int main(int argc, char** argv) {
+    // Optionally use argv later if needed
     print("\033[2J\033[H");
     print("\033[96m  __ _ _   _ _ __ _   ___  __\033[0m\n");
     print("\033[96m / _` | | | | '__| | | \\ \\/ /\033[0m\n");
@@ -184,6 +163,24 @@ void _start() {
         
         char *cmd = input;
         char *arg = "";
+        char *pipe_symbol = 0;
+        
+        // Find pipe symbol first
+        for (int i = 0; input[i]; i++) {
+            if (input[i] == '|') {
+                input[i] = '\0';
+                pipe_symbol = input + i + 1;
+                while (*pipe_symbol == ' ') pipe_symbol++;
+                // Clean trailing space before pipe
+                int j = i - 1;
+                while (j >= 0 && input[j] == ' ') {
+                    input[j] = '\0';
+                    j--;
+                }
+                break;
+            }
+        }
+        
         for (int i = 0; input[i]; i++) {
             if (input[i] == ' ') {
                 input[i] = '\0';
@@ -207,43 +204,6 @@ void _start() {
             print("  exit      - Exit shell\n");
         } else if (strcmp(cmd, "clear") == 0) {
             print("\033[2J\033[H");
-        } else if (strcmp(cmd, "exec") == 0) {
-            int pid = spawn(arg);
-            if (pid > 0) {
-                print("\033[90m[Shell] Spawned process. Waiting...\033[0m\n");
-                wait(pid);
-                print("\033[90m[Shell] Process finished.\033[0m\n");
-            } else {
-                print("\033[91m[Shell] Failed to spawn process.\033[0m\n");
-            }
-        } else if (strcmp(cmd, "ls") == 0) {
-            char buf[1024];
-            int detailed = 0;
-            char* path = arg;
-            if (arg[0] == '-' && arg[1] == 'l' && (arg[2] == ' ' || arg[2] == '\0')) {
-                detailed = 1;
-                path = arg + 2;
-                while (*path == ' ') path++;
-            }
-            int res = listdir(path[0] == '\0' ? "." : path, buf, 1024, detailed);
-            if (res >= 0 && buf[0] != '\0') {
-                print(buf); print("\n");
-            } else if (res < 0) {
-                print("ls: cannot open directory\n");
-            }
-        } else if (strcmp(cmd, "cat") == 0) {
-            int fd = open(arg);
-            if (fd >= 0) {
-                char buf[513];
-                int n = read(fd, buf, 512);
-                if (n > 0) {
-                    buf[n] = 0;
-                    print(buf); print("\n");
-                }
-                close(fd);
-            } else {
-                print("cat: file not found\n");
-            }
         } else if (strcmp(cmd, "pwd") == 0) {
             char buf[256];
             if (getcwd(buf, 256) == 0) {
@@ -262,43 +222,44 @@ void _start() {
                     print(": No such file or directory\n");
                 }
             }
-        } else if (strcmp(cmd, "mkdir") == 0) {
-            int res = mkdir(arg);
-            if (res < 0) print("mkdir: failed\n");
-        } else if (strcmp(cmd, "rm") == 0) {
-            int res = unlink(arg);
-            if (res < 0) print("rm: failed\n");
-        } else if (strcmp(cmd, "echo") == 0) {
-            char* text = arg;
-            char* redirect = 0;
-            for (int i = 0; text[i]; i++) {
-                if (text[i] == '>') {
-                    text[i] = 0;
-                    redirect = text + i + 1;
-                    while (*redirect == ' ') redirect++;
-                    break;
-                }
-            }
-            if (redirect && *redirect) {
-                create_file(redirect);
-                int fd = open(redirect);
-                if (fd >= 0) {
-                    write(fd, text, strlen(text));
-                    close(fd);
-                } else {
-                    print("echo: cannot open file for writing\n");
-                }
-            } else {
-                print(text); print("\n");
-            }
         } else if (strcmp(cmd, "exit") == 0) {
             break;
         } else {
-            print("\033[91mUnknown command: \033[0m");
-            print(input);
-            print("\n");
+            if (pipe_symbol && *pipe_symbol) {
+                int p[2];
+                if (pipe(p) < 0) {
+                    print("pipe failed\n");
+                    continue;
+                }
+                
+                int pid1 = shell_exec(cmd, arg, 0, p[1]);
+                close(p[1]);
+                
+                char* cmd2 = pipe_symbol;
+                char* arg2 = "";
+                for (int i = 0; cmd2[i]; i++) {
+                    if (cmd2[i] == ' ') {
+                        cmd2[i] = '\0';
+                        arg2 = cmd2 + i + 1;
+                        break;
+                    }
+                }
+                
+                int pid2 = shell_exec(cmd2, arg2, p[0], 1);
+                close(p[0]);
+                
+                wait(pid1);
+                wait(pid2);
+            } else {
+                int pid = shell_exec(cmd, arg, 0, 1);
+                if (pid > 0) {
+                    wait(pid);
+                } else {
+                    print("fork failed\n");
+                }
+            }
         }
     }
     
-    exit(0);
+    return 0;
 }

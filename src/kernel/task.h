@@ -25,6 +25,8 @@ struct task {
     struct task* next;
     void* fd_table[16]; // Pointers to global_file_descriptor_t
     unsigned int pending_signals;
+    unsigned int heap_start;
+    unsigned int heap_end;
 };
 
 void tasking_init(void);

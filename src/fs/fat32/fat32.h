@@ -70,6 +70,7 @@ struct fat32_lfn_entry {
 
 void fat32_init(void);
 int fat32_read_file(const char* filename, unsigned char* buffer);
+int fat32_read_file_ex(const char* filename, unsigned char* buffer, size_t size, unsigned int offset);
 int fat32_create_file(const char* filename, unsigned char attr);
 int fat32_write_file(const char* filename, const unsigned char* buffer, unsigned int size);
 int fat32_delete_file(const char* filename);
