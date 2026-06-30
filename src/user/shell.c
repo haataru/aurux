@@ -1,5 +1,5 @@
 #include "../lib/lib.h"
-
+#include "../lib/pwd.h"
 // Syscalls are now included via lib.h -> syscalls.h
 
 static int shell_exec(char* cmd, char* arg, int in_fd, int out_fd) {
@@ -130,14 +130,34 @@ int main(int argc, char** argv) {
     char input[256];
     char cwd[256];
     
+    int uid = getuid();
+    struct passwd pwd;
+    char username[32] = "unknown";
+    char homedir[64] = "/";
+    
+    if (getpwuid(uid, &pwd) == 0) {
+        strcpy(username, pwd.pw_name);
+        strcpy(homedir, pwd.pw_dir);
+    }
+    
     while (1) {
         if (getcwd(cwd, 256) != 0) {
             cwd[0] = '/';
             cwd[1] = '\0';
         }
         
-        print("\033[92muser@aurux\033[0m:\033[94m");
-        print(cwd);
+        print("\033[92m");
+        print(username);
+        print("@aurux\033[0m:\033[94m");
+        
+        int home_len = strlen(homedir);
+        if (strncmp(cwd, homedir, home_len) == 0 && (cwd[home_len] == '/' || cwd[home_len] == '\0')) {
+            print("~");
+            print(cwd + home_len);
+        } else {
+            print(cwd);
+        }
+        
         print("\033[0m$ ");
         
         int pos = 0;
@@ -234,12 +254,21 @@ int main(int argc, char** argv) {
                 print("pwd failed\n");
             }
         } else if (strcmp(cmd, "cd") == 0) {
-            if (arg[0] == '\0') {
-                print("cd: missing argument\n");
+            if (arg[0] == '\0' || strcmp(arg, "~") == 0) {
+                if (chdir(homedir) != 0) {
+                    print("cd: failed to change to home directory\n");
+                }
             } else {
-                if (chdir(arg) != 0) {
+                char target[256];
+                if (arg[0] == '~') {
+                    strcpy(target, homedir);
+                    strcat(target, arg + 1);
+                } else {
+                    strcpy(target, arg);
+                }
+                if (chdir(target) != 0) {
                     print("cd: ");
-                    print(arg);
+                    print(target);
                     print(": No such file or directory\n");
                 }
             }

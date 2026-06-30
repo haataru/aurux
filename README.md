@@ -4,27 +4,28 @@
 
 ## Требования для сборки
 
-- `i686-linux-gnu-gcc`
-- `i686-linux-gnu-as`
-- `i686-linux-gnu-ld`
-- `mtools`
-- `dosfstools`
-- `qemu-system-i386`
+Проект написан на стандартных технологиях, поэтому технически его можно собрать под любую ОС (Linux/Windows WSL), установив кросс-компилятор `i686-elf-gcc` и утилиты `mtools`, `dosfstools`, `qemu`. 
+Однако, в данный момент сборка оптимизирована и протестирована под **macOS** (Apple Silicon / Intel).
+
+Для macOS необходимо установить следующие пакеты через Homebrew:
+```bash
+brew install i686-elf-gcc i686-elf-binutils
+brew install mtools
+brew install dosfstools
+brew install qemu
+```
 
 ## Сборка и запуск
 
-Для пользователей Windows предусмотрены автоматические скрипты (используют Docker для безопасной сборки):
+Для удобства сборки и запуска в macOS используется специальный скрипт `build_macos.sh`. 
 
-```cmd
-.\build.bat   # Собирает ОС с нуля и запускает QEMU
-.\check.bat   # Прогоняет статический анализатор (sparse)
-```
-
-Или вручную через `make`:
 ```bash
-make all
-make run
-make check
+# Полная сборка с нуля:
+./build_macos.sh clean
+./build_macos.sh all
+
+# Запуск в эмуляторе QEMU:
+./build_macos.sh run
 ```
 
 ## Утилиты (User Space)

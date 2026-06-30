@@ -1,7 +1,7 @@
 #ifndef MALLOC_H
 #define MALLOC_H
 
-typedef unsigned int size_t;
+#include "../kernel/stddef.h"
 
 void* malloc(size_t size);
 void free(void* ptr);

@@ -1,4 +1,3 @@
-
 #include "kernel.h"
 #include "../drivers/vga/vga.h"
 #include "../drivers/keyboard/keyboard.h"
@@ -83,8 +82,12 @@ void OSmain(unsigned int magic, unsigned int addr) {
         vga_print("Failed to open file on disk!\n");
     }
     
-    vga_print("Starting User Space Shell...\n");
-    elf_load("shell.elf");
+    vga_print("Starting User Space...\n");
+    int pid = elf_load("/bin/login.elf");
+    if (pid < 0) {
+        vga_print("login.elf not found, falling back to shell.elf\n");
+        elf_load("/shell.elf");
+    }
     
     // Shell execution is temporarily bypassed to verify thread functionality.
     // shell_run();

@@ -81,8 +81,10 @@ int elf_load(const char* filename) {
     }
     
     unsigned int user_stack_top = 0xB0000000;
-    unsigned int user_stack_phys = (unsigned int)pmm_alloc_page();
-    vmm_map_page_ex(new_pd, user_stack_top - PAGE_SIZE, user_stack_phys, PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
+    for (int s = 1; s <= 4; s++) {
+        unsigned int user_stack_phys = (unsigned int)pmm_alloc_page();
+        vmm_map_page_ex(new_pd, user_stack_top - (s * PAGE_SIZE), user_stack_phys, PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
+    }
     
     unsigned int esp = user_stack_top;
     
@@ -140,14 +142,12 @@ int elf_exec(const char* filename, const char* args, struct registers* regs) {
     
     Elf32_Ehdr ehdr;
     if (fs_read(fd, (char*)&ehdr, sizeof(Elf32_Ehdr)) != sizeof(Elf32_Ehdr)) {
-        vga_print("EXEC: Failed to read ELF header.\n");
         fs_close(fd);
         return -1;
     }
     
     unsigned int magic = *(unsigned int*)ehdr.e_ident;
     if (magic != ELF_MAGIC || ehdr.e_type != 2) {
-        vga_print("EXEC: Invalid magic number or type.\n");
         fs_close(fd);
         return -1;
     }
@@ -217,8 +217,10 @@ int elf_exec(const char* filename, const char* args, struct registers* regs) {
     }
     
     unsigned int user_stack_top = 0xB0000000;
-    unsigned int user_stack_phys = (unsigned int)pmm_alloc_page();
-    vmm_map_page_ex(new_pd, user_stack_top - PAGE_SIZE, user_stack_phys, PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
+    for (int s = 1; s <= 4; s++) {
+        unsigned int user_stack_phys = (unsigned int)pmm_alloc_page();
+        vmm_map_page_ex(new_pd, user_stack_top - (s * PAGE_SIZE), user_stack_phys, PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
+    }
     
     unsigned int esp = user_stack_top;
     

@@ -134,3 +134,28 @@ int get_processes(void* buffer, int max_count) {
     asm volatile("int $0x80" : "=a"(ret) : "a"(24), "b"(buffer), "c"(max_count) : "memory");
     return ret;
 }
+
+int getuid(void) {
+    int ret;
+    asm volatile("int $0x80" : "=a"(ret) : "a"(25) : "memory");
+    return ret;
+}
+
+int setuid(unsigned int uid) {
+    int ret;
+    asm volatile("int $0x80" : "=a"(ret) : "a"(26), "b"(uid) : "memory");
+    return ret;
+}
+
+int getgid(void) {
+    int ret;
+    asm volatile("int $0x80" : "=a"(ret) : "a"(27) : "memory");
+    return ret;
+}
+
+int setgid(unsigned int gid) {
+    int ret;
+    asm volatile("int $0x80" : "=a"(ret) : "a"(28), "b"(gid) : "memory");
+    return ret;
+}
+

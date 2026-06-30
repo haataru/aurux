@@ -21,6 +21,9 @@ void tasking_init(void) {
     main_task->waiting_for_pid = 0;
     main_task->waiting_for_io = NULL;
     main_task->pending_signals = 0;
+    main_task->uid = 0;
+    main_task->euid = 0;
+    main_task->gid = 0;
     for (int i = 0; i < 16; i++) main_task->fd_table[i] = NULL;
     main_task->next = main_task; // Circular queue implementation for round-robin scheduling.
     
@@ -46,6 +49,15 @@ void create_task(void (*entry_point)(void)) {
     new_task->waiting_for_pid = 0;
     new_task->waiting_for_io = NULL;
     new_task->pending_signals = 0;
+    if (current_task) {
+        new_task->uid = current_task->uid;
+        new_task->euid = current_task->euid;
+        new_task->gid = current_task->gid;
+    } else {
+        new_task->uid = 0;
+        new_task->euid = 0;
+        new_task->gid = 0;
+    }
     for (int i = 0; i < 16; i++) new_task->fd_table[i] = NULL;
     
     unsigned int* stack = (unsigned int*)pmm_alloc_page();
@@ -91,6 +103,15 @@ void create_user_task(void (*entry_point)(void)) {
     new_task->waiting_for_pid = 0;
     new_task->waiting_for_io = NULL;
     new_task->pending_signals = 0;
+    if (current_task) {
+        new_task->uid = current_task->uid;
+        new_task->euid = current_task->euid;
+        new_task->gid = current_task->gid;
+    } else {
+        new_task->uid = 0;
+        new_task->euid = 0;
+        new_task->gid = 0;
+    }
     for (int i = 0; i < 16; i++) new_task->fd_table[i] = NULL;
     
     unsigned int* kstack = (unsigned int*)pmm_alloc_page();
@@ -139,6 +160,15 @@ struct task* create_process(unsigned int* page_dir, unsigned int entry_point, un
     new_task->waiting_for_io = NULL;
     new_task->pending_signals = 0;
     extern struct task* current_task;
+    if (current_task) {
+        new_task->uid = current_task->uid;
+        new_task->euid = current_task->euid;
+        new_task->gid = current_task->gid;
+    } else {
+        new_task->uid = 0;
+        new_task->euid = 0;
+        new_task->gid = 0;
+    }
     if (current_task) {
         for (int i = 0; i < 16; i++) {
             new_task->fd_table[i] = current_task->fd_table[i];
@@ -390,6 +420,9 @@ int task_fork(unsigned int esp) {
     child->waiting_for_pid = 0;
     child->waiting_for_io = NULL;
     child->pending_signals = 0;
+    child->uid = parent->uid;
+    child->euid = parent->euid;
+    child->gid = parent->gid;
     child->heap_start = parent->heap_start;
     child->heap_end = parent->heap_end;
     

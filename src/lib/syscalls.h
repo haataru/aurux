@@ -23,5 +23,9 @@ int gettime(int* time_arr);
 void sleep(unsigned int ms);
 int kill(unsigned int pid, int signal);
 int get_processes(void* buffer, int max_count);
+int getuid(void);
+int setuid(unsigned int uid);
+int getgid(void);
+int setgid(unsigned int gid);
 
 #endif

@@ -1,8 +1,5 @@
 #include "malloc.h"
 
-#ifndef NULL
-#define NULL ((void*)0)
-#endif
 
 struct block_meta {
     size_t size;

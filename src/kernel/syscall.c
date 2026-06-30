@@ -1,5 +1,10 @@
 #include "syscall.h"
 #include "kernel.h"
+#include "task.h"
+#include "../drivers/vga/vga.h"
+#include "../memory/paging.h"
+#include "../fs/fs.h"
+#include "../drivers/rtc/rtc.h"
 
 extern int task_fork(unsigned int esp);
 extern int elf_exec(const char* filename, const char* args, struct registers* regs);
@@ -7,13 +12,6 @@ extern void sleep(unsigned int ms);
 extern int task_kill(unsigned int pid, int signal);
 extern int task_get_processes(void* buffer, int max_count);
 extern struct task* current_task;
-#include "../drivers/vga/vga.h"
-#include "task.h"
-#include "../memory/paging.h"
-#include "../fs/fs.h"
-#include "../drivers/rtc/rtc.h"
-
-// struct registers moved to syscall.h
 
 static int validate_user_ptr(const void* ptr, unsigned int size) {
     unsigned int addr = (unsigned int)ptr;
@@ -267,6 +265,21 @@ void syscall_handler(unsigned int esp) {
                 break;
             }
             regs->eax = task_get_processes((void*)arg1, arg2);
+            break;
+        case 25: // sys_getuid
+            regs->eax = current_task->uid;
+            break;
+        case 26: // sys_setuid
+            current_task->uid = arg1;
+            current_task->euid = arg1;
+            regs->eax = 0;
+            break;
+        case 27: // sys_getgid
+            regs->eax = current_task->gid;
+            break;
+        case 28: // sys_setgid
+            current_task->gid = arg1;
+            regs->eax = 0;
             break;
         default:
             vga_print("Unknown syscall!\n");

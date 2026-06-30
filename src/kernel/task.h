@@ -28,6 +28,9 @@ struct task {
     unsigned int heap_start;
     unsigned int heap_end;
     char name[32];
+    unsigned int uid;
+    unsigned int euid;
+    unsigned int gid;
 };
 
 void tasking_init(void);

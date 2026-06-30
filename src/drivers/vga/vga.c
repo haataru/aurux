@@ -1,4 +1,3 @@
-
 #include "vga.h"
 #include "../../kernel/kernel.h"
 

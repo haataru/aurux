@@ -1,4 +1,3 @@
-
 #include "lib.h"
 #include <stdarg.h>
 
