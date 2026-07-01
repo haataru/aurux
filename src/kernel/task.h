@@ -31,6 +31,8 @@ struct task {
     unsigned int uid;
     unsigned int euid;
     unsigned int gid;
+    unsigned int egid;
+    unsigned int umask;
 };
 
 void tasking_init(void);

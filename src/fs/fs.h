@@ -8,6 +8,16 @@
 
 #define MAX_OPEN_FILES 16
 
+#ifndef FS_STAT_DEFINED
+#define FS_STAT_DEFINED
+struct fs_stat {
+    unsigned int mode;
+    unsigned int uid;
+    unsigned int gid;
+    unsigned int size;
+};
+#endif
+
 struct fs_driver {
     int (*open)(const char* path);
     int (*read)(const char* path, char* buf, size_t size, unsigned int offset);
@@ -18,6 +28,9 @@ struct fs_driver {
     int (*list_dir)(const char* path, char* output, unsigned int output_size, int detailed);
     int (*get_size)(const char* path);
     int (*is_dir)(const char* path);
+    int (*chown)(const char* path, int uid, int gid);
+    int (*chmod)(const char* path, int mode);
+    int (*stat)(const char* path, struct fs_stat* st);
     int (*close)(unsigned int offset, void* internal_data, int mode);
 };
 
@@ -60,6 +73,9 @@ void fs_resolve_path(const char* input_path, char* abs_path);
 int fs_change_dir(const char* path);
 const char* fs_get_cwd(void);
 int fs_exists(const char* path);
+int fs_chown(const char* path, int uid, int gid);
+int fs_chmod(const char* path, int mode);
 int fs_get_file_size(const char* path);
+int fs_stat(const char* path, struct fs_stat* st);
 
 #endif

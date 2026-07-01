@@ -281,6 +281,34 @@ void syscall_handler(unsigned int esp) {
             current_task->gid = arg1;
             regs->eax = 0;
             break;
+        case 29: // sys_chown
+            if (!validate_user_string((const char*)arg1)) {
+                destroy_current_process();
+                break;
+            }
+            regs->eax = fs_chown((const char*)arg1, arg2, arg3);
+            break;
+        case 30: // sys_chmod
+            if (!validate_user_string((const char*)arg1)) {
+                destroy_current_process();
+                break;
+            }
+            regs->eax = fs_chmod((const char*)arg1, arg2);
+            break;
+        case 31: // sys_umask
+            regs->eax = current_task->umask;
+            current_task->umask = arg1 & 0777;
+            break;
+        case 32: // sys_stat
+            if (!validate_user_string((const char*)arg1) || !validate_user_ptr((void*)arg2, sizeof(struct fs_stat))) {
+                destroy_current_process();
+                break;
+            }
+            regs->eax = fs_stat((const char*)arg1, (struct fs_stat*)arg2);
+            break;
+        case 33: // sys_geteuid
+            regs->eax = current_task->euid;
+            break;
         default:
             vga_print("Unknown syscall!\n");
             break;

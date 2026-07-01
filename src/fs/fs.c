@@ -114,9 +114,12 @@ static struct fs_driver fat32_fs_driver = {
 };
 
 extern void devfs_init(void);
+extern void ext2_init(void);
+extern struct fs_driver ext2_fs_driver;
 
 void fs_init(void) {
     fat32_init();
+    ext2_init();
     
     for (int i = 0; i < MAX_MOUNT_POINTS; i++) mount_points[i].used = 0;
     
@@ -128,7 +131,8 @@ void fs_init(void) {
         global_fd_table[i].mode = 0;
     }
     
-    fs_mount("/", &fat32_fs_driver);
+    fs_mount("/", &ext2_fs_driver);
+    fs_mount("/fat32", &fat32_fs_driver);
     devfs_init();
 }
 
@@ -252,7 +256,8 @@ int fs_open(const char* path) {
     struct fs_driver* driver = fs_get_driver(abs_path, &rel_path);
     if (!driver) return -1;
     
-    if (driver->open(rel_path) < 0) return -1;
+    int open_err = driver->open(rel_path);
+    if (open_err < 0) return open_err;
     
     extern struct task* current_task;
     int l_fd = -1;
@@ -392,9 +397,9 @@ int fs_list(const char* path, char* output, unsigned int output_size, int detail
     
     if (strcmp(abs_path, "/") == 0) {
         if (detailed) {
-            strcat(output, "2026-01-01 00:00  0  dev/\n");
+            strcat(output, "2026-01-01 00:00  0  /dev\n");
         } else {
-            strcat(output, "dev/ ");
+            strcat(output, "/dev ");
         }
     }
     
@@ -421,7 +426,7 @@ int fs_change_dir(const char* path) {
     struct fs_driver* driver = fs_get_driver(abs_path, &rel_path);
     if (!driver) return -1;
     
-    if (driver->is_dir(rel_path)) {
+    if (driver->is_dir(rel_path) == 1) {
         strcpy(current_path, abs_path);
         return 0;
     }
@@ -439,4 +444,31 @@ int fs_exists(const char* path) {
     struct fs_driver* driver = fs_get_driver(abs_path, &rel_path);
     if (!driver) return -1;
     return (driver->get_size(rel_path) >= 0);
+}
+
+int fs_chown(const char* path, int uid, int gid) {
+    char abs_path[256];
+    fs_resolve_path(path, abs_path);
+    const char* rel_path;
+    struct fs_driver* driver = fs_get_driver(abs_path, &rel_path);
+    if (!driver || !driver->chown) return -1;
+    return driver->chown(rel_path, uid, gid);
+}
+
+int fs_chmod(const char* path, int mode) {
+    char abs_path[256];
+    fs_resolve_path(path, abs_path);
+    const char* rel_path;
+    struct fs_driver* driver = fs_get_driver(abs_path, &rel_path);
+    if (!driver || !driver->chmod) return -1;
+    return driver->chmod(rel_path, mode);
+}
+
+int fs_stat(const char* path, struct fs_stat* st) {
+    char abs_path[256];
+    fs_resolve_path(path, abs_path);
+    const char* rel_path;
+    struct fs_driver* driver = fs_get_driver(abs_path, &rel_path);
+    if (!driver || !driver->stat) return -1;
+    return driver->stat(rel_path, st);
 }

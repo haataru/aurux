@@ -130,6 +130,7 @@ int main(int argc, char** argv) {
     // Create home directory
     mkdir("/home"); // Ignore error if exists
     mkdir(pwd.pw_dir);
+    chown(pwd.pw_dir, pwd.pw_uid, pwd.pw_gid);
     
     return 0;
 }

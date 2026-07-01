@@ -44,20 +44,28 @@ $(IMAGE): $(KERNEL) $(SHELL_ELF) $(USER_BIN_ELFS)
 	@rm -f $(IMAGE)
 	@mkdir -p build
 	dd if=/dev/zero of=$(IMAGE) bs=1M count=64
-	$(MKFS_FAT) -F 32 $(IMAGE)
-	mmd -i $(IMAGE) ::/bin || true
-	mmd -i $(IMAGE) ::/etc || true
-	mmd -i $(IMAGE) ::/root || true
-	mmd -i $(IMAGE) ::/home || true
-	mcopy -o -i $(IMAGE) src/etc/passwd ::/etc/passwd
-	mcopy -o -i $(IMAGE) src/etc/groups ::/etc/groups
-	echo "Hello from FAT32 real disk!" > $(BUILD_DIR)/message.txt
-	mcopy -o -i $(IMAGE) $(BUILD_DIR)/message.txt ::message.txt
-	mcopy -o -i $(IMAGE) $(SHELL_ELF) ::shell.elf
-	mcopy -o -i $(IMAGE) $(SHELL_ELF) ::/bin/shell.elf
+	mke2fs -t ext2 -b 1024 $(IMAGE)
+	e2mkdir $(IMAGE):/bin || true
+	e2mkdir $(IMAGE):/etc || true
+	e2mkdir $(IMAGE):/root || true
+	e2mkdir $(IMAGE):/home || true
+	e2cp src/etc/passwd $(IMAGE):/etc/passwd
+	e2cp src/etc/groups $(IMAGE):/etc/groups
+	# Set permissions (root owned)
+	# For simplicity, we just copy them.
+	echo "Hello from Ext2 real disk!" > $(BUILD_DIR)/message.txt
+	e2cp $(BUILD_DIR)/message.txt $(IMAGE):/message.txt
+	e2cp $(SHELL_ELF) $(IMAGE):/shell.elf
+	debugfs -w -R 'sif /shell.elf mode 0100755' $(IMAGE) || true
+	e2cp $(SHELL_ELF) $(IMAGE):/bin/shell.elf
+	debugfs -w -R 'sif /bin/shell.elf mode 0100755' $(IMAGE) || true
 	for elf in $(USER_BIN_ELFS); do \
-		mcopy -o -i $(IMAGE) $$elf ::/bin/; \
+		e2cp $$elf $(IMAGE):/bin/; \
+		debugfs -w -R "sif /bin/$$(basename $$elf) mode 0100755" $(IMAGE) || true; \
 	done
+	debugfs -w -R 'sif /bin/su.elf mode 0104755' $(IMAGE) || true
+	debugfs -w -R 'sif /bin/passwd.elf mode 0104755' $(IMAGE) || true
+	debugfs -w -R 'sif /root mode 040700' $(IMAGE) || true
 
 $(KERNEL): $(KERNEL_OBJS) $(ASM_OBJ) src/kernel/link.ld
 	$(LD) $(LDFLAGS) -o $@ $(KERNEL_OBJS) $(ASM_OBJ)

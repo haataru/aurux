@@ -159,3 +159,33 @@ int setgid(unsigned int gid) {
     return ret;
 }
 
+int chown(const char* path, int uid, int gid) {
+    int ret;
+    asm volatile("int $0x80" : "=a"(ret) : "a"(29), "b"(path), "c"(uid), "d"(gid) : "memory");
+    return ret;
+}
+
+int chmod(const char* path, int mode) {
+    int ret;
+    asm volatile("int $0x80" : "=a"(ret) : "a"(30), "b"(path), "c"(mode) : "memory");
+    return ret;
+}
+
+int umask(int mask) {
+    int ret;
+    asm volatile("int $0x80" : "=a"(ret) : "a"(31), "b"(mask) : "memory");
+    return ret;
+}
+
+int stat(const char* path, struct fs_stat* st) {
+    int ret;
+    asm volatile("int $0x80" : "=a"(ret) : "a"(32), "b"(path), "c"(st) : "memory");
+    return ret;
+}
+
+int geteuid(void) {
+    int ret;
+    asm volatile("int $0x80" : "=a"(ret) : "a"(33) : "memory");
+    return ret;
+}
+

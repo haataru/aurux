@@ -5,8 +5,9 @@ int write(int fd, const char* data, int size);
 void print(const char* str);
 void exit(int status);
 int read(int fd, char* buf, int count);
+// Process management
 int fork(void);
-int exec(const char* path, const char* args);
+int exec(const char* filename, const char* args);
 int spawn(const char* path, const char* args);
 int wait(int pid);
 int pipe(int fd[2]);
@@ -27,5 +28,21 @@ int getuid(void);
 int setuid(unsigned int uid);
 int getgid(void);
 int setgid(unsigned int gid);
+int chown(const char* path, int uid, int gid);
+int chmod(const char* path, int mode);
+int umask(int mask);
+
+#ifndef FS_STAT_DEFINED
+#define FS_STAT_DEFINED
+struct fs_stat {
+    unsigned int mode;
+    unsigned int uid;
+    unsigned int gid;
+    unsigned int size;
+};
+#endif
+
+int stat(const char* path, struct fs_stat* st);
+int geteuid(void);
 
 #endif

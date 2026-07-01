@@ -24,6 +24,8 @@ void tasking_init(void) {
     main_task->uid = 0;
     main_task->euid = 0;
     main_task->gid = 0;
+    main_task->egid = 0;
+    main_task->umask = 022;
     for (int i = 0; i < 16; i++) main_task->fd_table[i] = NULL;
     main_task->next = main_task; // Circular queue implementation for round-robin scheduling.
     
@@ -53,10 +55,14 @@ void create_task(void (*entry_point)(void)) {
         new_task->uid = current_task->uid;
         new_task->euid = current_task->euid;
         new_task->gid = current_task->gid;
+        new_task->egid = current_task->egid;
+        new_task->umask = current_task->umask;
     } else {
         new_task->uid = 0;
         new_task->euid = 0;
         new_task->gid = 0;
+        new_task->egid = 0;
+        new_task->umask = 022;
     }
     for (int i = 0; i < 16; i++) new_task->fd_table[i] = NULL;
     
@@ -107,10 +113,14 @@ void create_user_task(void (*entry_point)(void)) {
         new_task->uid = current_task->uid;
         new_task->euid = current_task->euid;
         new_task->gid = current_task->gid;
+        new_task->egid = current_task->egid;
+        new_task->umask = current_task->umask;
     } else {
         new_task->uid = 0;
         new_task->euid = 0;
         new_task->gid = 0;
+        new_task->egid = 0;
+        new_task->umask = 022;
     }
     for (int i = 0; i < 16; i++) new_task->fd_table[i] = NULL;
     
@@ -164,10 +174,14 @@ struct task* create_process(unsigned int* page_dir, unsigned int entry_point, un
         new_task->uid = current_task->uid;
         new_task->euid = current_task->euid;
         new_task->gid = current_task->gid;
+        new_task->egid = current_task->egid;
+        new_task->umask = current_task->umask;
     } else {
         new_task->uid = 0;
         new_task->euid = 0;
         new_task->gid = 0;
+        new_task->egid = 0;
+        new_task->umask = 022;
     }
     if (current_task) {
         for (int i = 0; i < 16; i++) {
@@ -423,6 +437,8 @@ int task_fork(unsigned int esp) {
     child->uid = parent->uid;
     child->euid = parent->euid;
     child->gid = parent->gid;
+    child->egid = parent->egid;
+    child->umask = parent->umask;
     child->heap_start = parent->heap_start;
     child->heap_end = parent->heap_end;
     

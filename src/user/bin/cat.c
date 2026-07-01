@@ -18,6 +18,8 @@ int main(int argc, char** argv) {
             write(1, buf, n);
         }
         close(fd);
+    } else if (fd == -2) {
+        print("cat: "); print(argv[1]); print(": Permission denied\n");
     } else {
         print("cat: "); print(argv[1]); print(": No such file or directory\n");
     }

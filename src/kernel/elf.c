@@ -14,6 +14,20 @@ int elf_load(const char* filename) {
         return -1;
     }
     
+    struct fs_stat st;
+    if (fs_stat(filename, &st) == 0) {
+        extern struct task* current_task;
+        if (current_task && current_task->euid != 0) {
+            if (st.uid == current_task->euid) {
+                if (!(st.mode & 0x0040)) { fs_close(fd); return -1; } // EXT2_S_IXUSR
+            } else if (st.gid == current_task->egid) {
+                if (!(st.mode & 0x0008)) { fs_close(fd); return -1; } // EXT2_S_IXGRP
+            } else {
+                if (!(st.mode & 0x0001)) { fs_close(fd); return -1; } // EXT2_S_IXOTH
+            }
+        }
+    }
+    
     Elf32_Ehdr ehdr;
     if (fs_read(fd, (char*)&ehdr, sizeof(Elf32_Ehdr)) != sizeof(Elf32_Ehdr)) {
         vga_print("ELF: Failed to read ELF header.\n");
@@ -123,6 +137,12 @@ int elf_load(const char* filename) {
     fs_close(fd);
     
     struct task* t = create_process(new_pd, ehdr.e_entry, esp);
+    
+    if (t && fs_stat(filename, &st) == 0) {
+        if (st.mode & 0x0800) t->euid = st.uid; // SUID
+        if (st.mode & 0x0400) t->egid = st.gid; // SGID
+    }
+    
     return t ? (int)t->id : -1;
 }
 
@@ -138,6 +158,19 @@ int elf_exec(const char* filename, const char* args, struct registers* regs) {
     int fd = fs_open(filename);
     if (fd < 0) {
         return -1;
+    }
+    
+    struct fs_stat st;
+    if (fs_stat(filename, &st) == 0) {
+        if (current_task && current_task->euid != 0) {
+            if (st.uid == current_task->euid) {
+                if (!(st.mode & 0x0040)) { fs_close(fd); return -1; }
+            } else if (st.gid == current_task->egid) {
+                if (!(st.mode & 0x0008)) { fs_close(fd); return -1; }
+            } else {
+                if (!(st.mode & 0x0001)) { fs_close(fd); return -1; }
+            }
+        }
     }
     
     Elf32_Ehdr ehdr;
@@ -301,6 +334,11 @@ int elf_exec(const char* filename, const char* args, struct registers* regs) {
     regs->eip = ehdr.e_entry;
     regs->useresp = esp;
     regs->eax = 0;
+    
+    if (fs_stat(filename, &st) == 0) {
+        if (st.mode & 0x0800) current_task->euid = st.uid; // SUID
+        if (st.mode & 0x0400) current_task->egid = st.gid; // SGID
+    }
     
     return 0;
 }

@@ -63,10 +63,16 @@ int main(int argc, char** argv) {
         if (getpwnam(username, &pwd) == 0) {
             if (verify_password(password, pwd.pw_passwd)) {
                 // Successful login
+                
+                // Ensure home directory exists (auto-create if first login)
+                if (chdir(pwd.pw_dir) != 0) {
+                    mkdir(pwd.pw_dir);
+                }
+                chown(pwd.pw_dir, pwd.pw_uid, pwd.pw_gid);
+                chdir(pwd.pw_dir);
+                
                 setuid(pwd.pw_uid);
                 setgid(pwd.pw_gid);
-                
-                chdir(pwd.pw_dir);
                 
                 // Execute shell
                 if (exec(pwd.pw_shell, "") < 0) {

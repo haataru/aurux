@@ -25,6 +25,15 @@ int printf(const char* format, ...);
 int sprintf(char* buffer, const char* format, ...);
 int kprintf(const char* format, ...);
 
+int setuid(unsigned int uid);
+int getgid(void);
+int setgid(unsigned int gid);
+int chown(const char* path, int uid, int gid);
+int chmod(const char* path, int mode);
+int umask(int mask);
+int stat(const char* path, struct fs_stat* st);
+int geteuid(void);
+
 // Utils
 void hex_to_str(unsigned int val, char* buf);
 
